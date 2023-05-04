@@ -3,20 +3,27 @@ compile and run dpdk on Darwin.
 
 To minimize the work, we should disable those drivers which macos does not have.
 ```
-meson setup -Ddisable_drivers=common/,dma/,event/,baseband/,crypto/,raw/,bus/ifpga,net/ark,net/liquidio,net/failsafe,net/fm10k,net/gve,net/hinic,net/i40e,net/igc,net/ionic,net/ice,net/ixgbe,net/atlantic,net/bnx2x,net/bnxt,net/cxgbe,net/ena,net/enic,net/ngbe,net/null,net/octeon_ep,net/qede,bus/pci,net/e1000,net/bonding,bus/auxiliary -Ddisable_libs=telemetry,cmdline,ipsec,security,distributor,jobstats,latencystats,lpm,graph,kni,gpudev,bitratestats,efd,stack,table,acl,reorder,port,node,rib,compressdev,regexdev,rawdev,bbdev,pcapng,fib,eventdev,hash,dmadev -Ddisable_apps=test-eventdev,test-cmdline,test-compress-perf,test-crypto-perf,test-flow-perf,test-gpudev,test-pipeline,test-regex,test-sad,test-acl,test-security-perf,test-bbdev,test-fib,test-pmd,test-mldev -Dtests=false
+meson setup -Ddisable_drivers=common/,dma/,event/,baseband/,crypto/,raw/,bus/ifpga,net/ark,net/liquidio,net/failsafe,net/fm10k,net/gve,net/hinic,net/i40e,net/igc,net/ionic,net/ice,net/ixgbe,net/atlantic,net/bnx2x,net/bnxt,net/cxgbe,net/ena,net/enic,net/ngbe,net/null,net/octeon_ep,net/qede,bus/pci,net/e1000,net/bonding,bus/auxiliary -Ddisable_libs=telemetry,ipsec,security,distributor,jobstats,latencystats,lpm,graph,kni,gpudev,bitratestats,efd,stack,table,acl,reorder,port,node,rib,compressdev,regexdev,rawdev,bbdev,pcapng,fib,eventdev,hash,dmadev -Ddisable_apps=test-eventdev,test-cmdline,test-compress-perf,test-crypto-perf,test-flow-perf,test-gpudev,test-pipeline,test-regex,test-sad,test-acl,test-security-perf,test-bbdev,test-fib,test-mldev -Dtests=false
 ninja
 ```
 
 For now it pass the compilation. Only library and drivers below are enabled. And pci bus did not really work.
 ```
 =================
+Applications Enabled
+=================
+
+apps:
+        test-pmd,
+
+=================
 Libraries Enabled
 =================
 
 libs:
         kvargs, telemetry, eal, ring, rcu, mempool, mbuf, net, 
-        meter, ethdev, pci, metrics, hash, timer, cfgfile, cryptodev, 
-        gro, gso, ip_frag, member, pcapng, mldev, sched, 
+        meter, ethdev, pci, cmdline, metrics, hash, timer, cfgfile, 
+        cryptodev, gro, gso, ip_frag, member, pcapng, mldev, sched, 
 
 Message: 
 ===============
@@ -35,8 +42,10 @@ net:
         pcap, ring, virtio, vmxnet3, 
 ```
 
+./app/dpdk-testpmd --no-huge --no-pci --no-hpet --no-shconf -l 4 -m 1024 -- -i
+
 Future work:
-make tap driver enabled.
+initial testpmd with no pci
 make vhost available so we can setup a qemu with dpdk vhostuserclient.
 enable some basic test for traffic
 

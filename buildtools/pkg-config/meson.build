@@ -38,8 +38,14 @@ Use libdpdk.pc instead of this file to query DPDK compile/link arguments''',
         libraries_private: dpdk_extra_ldflags)
 
 platform_flags = []
-if not is_windows
+whole_flags = ['-Wl,--whole-archive']
+no_whole_flags = ['-Wl,--no-whole-archive']
+if not is_windows and not is_darwin
     platform_flags += ['-Wl,--export-dynamic'] # ELF only
+endif
+if is_darwin
+    whole_flags = ['-Wl,--all_load']
+    no_whole_flags = ['-Wl,--noall_load']
 endif
 pkg.generate(name: 'DPDK', # main DPDK pkgconfig file
         filebase: 'libdpdk',
@@ -49,9 +55,9 @@ Note that CFLAGS might contain an -march flag higher than typical baseline.
 This is required for a number of static inline functions in the public headers.''',
         requires: ['libdpdk-libs', libbsd], # may need libbsd for string funcs
                       # if libbsd is not enabled, then this is blank
-        libraries_private: ['-Wl,--whole-archive'] +
+        libraries_private: whole_flags +
             dpdk_drivers + dpdk_static_libraries +
-            ['-Wl,--no-whole-archive'] + platform_flags
+            no_whole_flags + platform_flags
 )
 
 # For static linking with dependencies as shared libraries,

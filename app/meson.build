@@ -33,7 +33,7 @@ apps = [
 
 default_cflags = machine_args + ['-DALLOW_EXPERIMENTAL_API']
 default_ldflags = []
-if get_option('default_library') == 'static' and not is_windows
+if get_option('default_library') == 'static' and not is_windows and not is_darwin
     default_ldflags += ['-Wl,--export-dynamic']
 endif
 
