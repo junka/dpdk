@@ -1467,7 +1467,7 @@ rte_mempool_event_callback_unregister(rte_mempool_event_callback *func,
 	rte_errno = -ret;
 	return ret;
 }
-
+#if !defined RTE_EXEC_ENV_DARWIN
 static void
 mempool_list_cb(struct rte_mempool *mp, void *arg)
 {
@@ -1563,3 +1563,4 @@ RTE_INIT(mempool_init_telemetry)
 	rte_telemetry_register_cmd("/mempool/info", mempool_handle_info,
 		"Returns mempool info. Parameters: pool_name");
 }
+#endif

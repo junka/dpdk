@@ -367,7 +367,7 @@ if dpdk_conf.has('RTE_LIB_METRICS')
     test_sources += ['test_metrics.c']
     fast_tests += [['metrics_autotest', true, true]]
 endif
-if not is_windows and dpdk_conf.has('RTE_LIB_TELEMETRY')
+if not is_windows and not is_darwin and dpdk_conf.has('RTE_LIB_TELEMETRY')
     test_sources += ['test_telemetry_json.c', 'test_telemetry_data.c']
     fast_tests += [['telemetry_json_autotest', true, true]]
     fast_tests += [['telemetry_data_autotest', true, true]]

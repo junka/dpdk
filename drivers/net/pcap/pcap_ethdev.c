@@ -345,9 +345,9 @@ eth_null_rx(void *queue __rte_unused,
 {
 	return 0;
 }
-
+#ifndef NSEC_PER_SEC
 #define NSEC_PER_SEC	1000000000L
-
+#endif
 /*
  * This function stores nanoseconds in `tv_usec` field of `struct timeval`,
  * because `ts` goes directly to nanosecond-precision dump.

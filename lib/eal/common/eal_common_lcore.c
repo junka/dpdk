@@ -11,7 +11,7 @@
 #include <rte_errno.h>
 #include <rte_lcore.h>
 #include <rte_log.h>
-#ifndef RTE_EXEC_ENV_WINDOWS
+#if !defined RTE_EXEC_ENV_WINDOWS && !defined RTE_EXEC_ENV_DARWIN
 #include <rte_telemetry.h>
 #endif
 
@@ -484,7 +484,7 @@ rte_lcore_dump(FILE *f)
 	rte_lcore_iterate(lcore_dump_cb, f);
 }
 
-#ifndef RTE_EXEC_ENV_WINDOWS
+#if !defined RTE_EXEC_ENV_WINDOWS && !defined RTE_EXEC_ENV_DARWIN
 static int
 lcore_telemetry_id_cb(unsigned int lcore_id, void *arg)
 {

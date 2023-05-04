@@ -17,7 +17,16 @@ extern "C" {
 #include <rte_trace_point.h>
 
 RTE_DECLARE_PER_LCORE(volatile int, trace_point_sz);
-
+#ifdef __APPLE__
+#define RTE_TRACE_POINT_REGISTER(trace, name) \
+rte_trace_point_t __attribute__((section("__TEXT,_trace_point"))) __##trace; \
+static const char __##trace##_name[] = RTE_STR(name); \
+RTE_INIT(trace##_init) \
+{ \
+	__rte_trace_point_register(&__##trace, __##trace##_name, \
+		(void (*)(void)) trace); \
+}
+#else
 #define RTE_TRACE_POINT_REGISTER(trace, name) \
 rte_trace_point_t __attribute__((section("__rte_trace_point"))) __##trace; \
 static const char __##trace##_name[] = RTE_STR(name); \
@@ -26,6 +35,7 @@ RTE_INIT(trace##_init) \
 	__rte_trace_point_register(&__##trace, __##trace##_name, \
 		(void (*)(void)) trace); \
 }
+#endif
 
 #define __rte_trace_point_emit_header_generic(t) \
 	RTE_PER_LCORE(trace_point_sz) = __RTE_TRACE_EVENT_HEADER_SZ

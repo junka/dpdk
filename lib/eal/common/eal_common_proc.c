@@ -920,7 +920,9 @@ mp_request_sync(const char *dst, struct rte_mp_msg *req,
 	pending_req.request = req;
 	pending_req.reply = &msg;
 	pthread_condattr_init(&attr);
+#ifndef __APPLE__
 	pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+#endif
 	pthread_cond_init(&pending_req.sync.cond, &attr);
 
 	exist = find_pending_request(dst, req->name);

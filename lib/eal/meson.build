@@ -10,7 +10,7 @@ if not is_windows
     subdir('unix')
 endif
 
-exec_envs = {'freebsd': 0, 'linux': 1, 'windows': 2}
+exec_envs = {'freebsd': 0, 'linux': 1, 'windows': 2, 'darwin': 3}
 foreach env, id:exec_envs
     dpdk_conf.set('RTE_ENV_' + env.to_upper(), id)
     dpdk_conf.set10('RTE_EXEC_ENV_IS_' + env.to_upper(), (exec_env == env))
@@ -23,7 +23,7 @@ subdir(exec_env)
 subdir(arch_subdir)
 
 deps += ['kvargs']
-if not is_windows
+if not is_windows and not is_darwin
     deps += ['telemetry']
 endif
 if dpdk_conf.has('RTE_USE_LIBBSD')

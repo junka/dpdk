@@ -17,7 +17,7 @@
 #include <rte_eal_paging.h>
 #include <rte_errno.h>
 #include <rte_log.h>
-#ifndef RTE_EXEC_ENV_WINDOWS
+#if !defined RTE_EXEC_ENV_WINDOWS && !defined RTE_EXEC_ENV_DARWIN
 #include <rte_telemetry.h>
 #endif
 
@@ -244,7 +244,7 @@ eal_memseg_list_alloc(struct rte_memseg_list *msl, int reserve_flags)
 	addr = eal_get_virtual_area(
 		msl->base_va, &mem_sz, page_sz, 0, reserve_flags);
 	if (addr == NULL) {
-#ifndef RTE_EXEC_ENV_WINDOWS
+#if !defined RTE_EXEC_ENV_WINDOWS && !defined RTE_EXEC_ENV_DARWIN
 		/* The hint would be misleading on Windows, because address
 		 * is by default system-selected (base VA = 0).
 		 * However, this function is called from many places,
@@ -1106,7 +1106,7 @@ fail:
 	return -1;
 }
 
-#ifndef RTE_EXEC_ENV_WINDOWS
+#if !defined RTE_EXEC_ENV_WINDOWS && !defined RTE_EXEC_ENV_DARWIN
 #define EAL_MEMZONE_LIST_REQ		"/eal/memzone_list"
 #define EAL_MEMZONE_INFO_REQ		"/eal/memzone_info"
 #define EAL_HEAP_LIST_REQ		"/eal/heap_list"

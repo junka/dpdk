@@ -2981,7 +2981,7 @@ cryptodev_handle_dev_caps(const char *cmd __rte_unused, const char *params,
 
 	return 0;
 }
-
+#if !defined RTE_EXEC_ENV_DARWIN
 RTE_INIT(cryptodev_init_telemetry)
 {
 	rte_telemetry_register_cmd("/cryptodev/info", cryptodev_handle_dev_info,
@@ -2996,3 +2996,4 @@ RTE_INIT(cryptodev_init_telemetry)
 			cryptodev_handle_dev_caps,
 			"Returns the capabilities for a cryptodev. Parameters: int dev_id");
 }
+#endif

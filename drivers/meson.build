@@ -253,8 +253,10 @@ foreach subpath:subdirs
 
                 lk_args = ['-Wl,--version-script=' + mingw_map.full_path()]
             endif
-        else
+        elif not is_darwin
             lk_args = ['-Wl,--version-script=' + version_map]
+        else
+            lk_args = ['-Wl,-all_load']
         endif
 
         shared_lib = shared_library(lib_name, sources,

@@ -110,7 +110,7 @@ rte_telemetry_register_cmd(const char *cmd, telemetry_cb fn, const char *help)
 	return 0;
 }
 
-#ifndef RTE_EXEC_ENV_WINDOWS
+#if !defined RTE_EXEC_ENV_WINDOWS && !defined RTE_EXEC_ENV_DARWIN
 
 static int
 list_commands(const char *cmd __rte_unused, const char *params __rte_unused,
@@ -636,7 +636,7 @@ rte_telemetry_init(const char *runtime_dir, const char *rte_version, rte_cpuset_
 	rte_log_ptr = log_fn;
 	logtype = registered_logtype;
 
-#ifndef RTE_EXEC_ENV_WINDOWS
+#if !defined RTE_EXEC_ENV_WINDOWS && !defined RTE_EXEC_ENV_DARWIN
 	if (telemetry_v2_init() != 0)
 		return -1;
 	TMTY_LOG(DEBUG, "Telemetry initialized ok\n");
