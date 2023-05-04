@@ -2,7 +2,7 @@
 # Copyright(c) 2017-2019 Intel Corporation
 
 # check the OS is supported, rather than going any further
-supported_exec_envs = ['freebsd', 'linux', 'windows']
+supported_exec_envs = ['freebsd', 'linux', 'windows', 'darwin']
 exec_env = host_machine.system()
 if not supported_exec_envs.contains(exec_env)
     error('unsupported system type "@0@"'.format(exec_env))
@@ -144,7 +144,7 @@ dpdk_conf.set('RTE_TOOLCHAIN_' + toolchain.to_upper().underscorify(), 1)
 dpdk_conf.set('RTE_ARCH_64', cc.sizeof('void *') == 8)
 dpdk_conf.set('RTE_ARCH_32', cc.sizeof('void *') == 4)
 
-if not is_windows
+if not is_windows and not is_darwin
     add_project_link_arguments('-Wl,--no-as-needed', language: 'c')
 endif
 

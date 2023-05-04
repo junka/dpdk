@@ -29,6 +29,12 @@ if is_windows
     )
     includes += include_directories('windows')
 endif
+if is_darwin
+    sources += files(
+            'darwin/pci.c',
+    )
+    includes += include_directories('darwin')
+endif
 
 require_iova_in_mbuf = false
 

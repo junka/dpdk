@@ -19,6 +19,9 @@
 #elif defined RTE_EXEC_ENV_FREEBSD
 #define EAL_DONTDUMP MADV_NOCORE
 #define EAL_DODUMP   MADV_CORE
+#elif defined RTE_EXEC_ENV_DARWIN
+#define EAL_DONTDUMP MADV_NOCORE
+#define EAL_DODUMP   MADV_CORE
 #else
 #error "madvise doesn't support this OS"
 #endif
@@ -77,6 +80,24 @@ eal_mem_free(void *virt, size_t size)
 	mem_unmap(virt, size);
 }
 
+#ifdef RTE_EXEC_ENV_DARWIN
+int
+eal_mem_set_dump(void *virt, size_t size, bool dump)
+{
+	RTE_SET_USED(virt);
+	RTE_SET_USED(size);
+	RTE_SET_USED(dump);
+
+	/* Windows does not dump reserved memory by default.
+	 *
+	 * There is <werapi.h> to include or exclude regions from the dump,
+	 * but this is not currently required by EAL.
+	 */
+
+	rte_errno = ENOTSUP;
+	return -1;
+}
+#else
 int
 eal_mem_set_dump(void *virt, size_t size, bool dump)
 {
@@ -89,6 +110,7 @@ eal_mem_set_dump(void *virt, size_t size, bool dump)
 	}
 	return ret;
 }
+#endif
 
 static int
 mem_rte_to_sys_prot(int prot)

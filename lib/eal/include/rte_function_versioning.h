@@ -90,7 +90,11 @@
 #define VERSION_SYMBOL_EXPERIMENTAL(b, e)
 #define __vsym
 #define BIND_DEFAULT_SYMBOL(b, e, n)
+#ifndef __APPLE__
 #define MAP_STATIC_SYMBOL(f, p) f __attribute__((alias(RTE_STR(p))))
+#else
+#define MAP_STATIC_SYMBOL(f, p)
+#endif
 /*
  * RTE_BUILD_SHARED_LIB=n
  */

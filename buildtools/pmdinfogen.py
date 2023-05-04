@@ -17,6 +17,12 @@ except ImportError:
     pass
 
 import coff
+import platform
+if platform.system() == "Darwin":
+    import macholib
+    from macholib.MachO import MachO
+    from macholib.SymbolTable import SymbolTable
+
 
 
 class ELFSymbol:
@@ -73,6 +79,62 @@ class ELFImage:
             if symbol.name.startswith(prefix):
                 yield ELFSymbol(self._image, symbol)
 
+
+class MACHImage:
+    def __init__(self, data):
+        self._image = MachO(data)
+        self._symtab = SymbolTable(self._image)
+
+    @property
+    def is_big_endian(self):
+        return self._image.header.magic in (macholib.mach_o.MH_MAGIC, macholib.mach_o.MH_CIGAM)
+
+    def find_by_name(self, name):
+        symbol = self._symtab.get_symbol_by_name(name)
+        return MACHSymbol(self._image, symbol) if symbol else None
+
+    def find_by_prefix(self, prefix):
+        for i in self._symtab.nlists:
+            symbol = i
+            if str(symbol[1]).startswith(prefix):
+                yield MACHSymbol(self._image, symbol)
+
+class MACHSymbol:
+    def __init__(self, image, symbol):
+        self._image = image
+        self._symbol = symbol
+
+    @property
+    def name(self):
+        return self._symbol.name
+
+    @property
+    def address(self):
+        return self._symbol.n_value
+
+    @property
+    def size(self):
+        return self._symbol.n_desc & 0xffff
+
+    @property
+    def type(self):
+        return self._symbol.n_type & 0x0e
+
+    @property
+    def section(self):
+        return self._symbol.get_section()
+
+    @property
+    def string_value(self):
+        size = self.size
+        value = self.get_value(0, size)
+        return value.decode("ascii", errors="ignore")  # assuming ASCII encoding
+
+    def get_value(self, offset, size):
+        section = self.section
+        data = section.data
+        base = self.address + offset - section.addr
+        return data[base : base + size]
 
 class COFFSymbol:
     def __init__(self, image, symbol):
@@ -240,6 +302,8 @@ def load_image(fmt, path):
         return ELFImage(open_input(path))
     if fmt == "coff":
         return COFFImage(read_input(path))
+    if fmt == "mach-o":
+        return MACHImage(path)
     raise Exception("unsupported object file format")
 
 

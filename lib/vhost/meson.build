@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017-2018 Intel Corporation
 
-if not is_linux
+if not is_linux and not is_darwin
     build = false
-    reason = 'only supported on Linux'
+    reason = 'only supported on unix'
 endif
 if has_libnuma == 1
     dpdk_conf.set10('RTE_LIBRTE_VHOST_NUMA', true)

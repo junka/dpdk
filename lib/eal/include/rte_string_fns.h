@@ -77,11 +77,15 @@ rte_strlcat(char *dst, const char *src, size_t size)
 
 /* pull in a strlcpy function */
 #ifdef RTE_EXEC_ENV_FREEBSD
-#ifndef __BSD_VISIBLE /* non-standard functions are hidden */
+#ifdef __BSD_VISIBLE /* non-standard functions are hidden */
 #define strlcpy(dst, src, size) rte_strlcpy(dst, src, size)
 #define strlcat(dst, src, size) rte_strlcat(dst, src, size)
 #endif
-
+#elif defined RTE_EXEC_ENV_DARWIN
+#if __DARWIN_C_LEVEL < __DARWIN_C_FULL
+#define strlcpy(dst, src, size) rte_strlcpy(dst, src, size)
+#define strlcat(dst, src, size) rte_strlcat(dst, src, size)
+#endif
 #else /* non-BSD platforms */
 #ifdef RTE_USE_LIBBSD
 #include <bsd/string.h>

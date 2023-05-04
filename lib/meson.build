@@ -67,21 +67,44 @@ libraries = [
 ]
 
 optional_libs = [
+        'acl',
+        'bbdev',
         'bitratestats',
         'cfgfile',
+        'cmdline',
+        'compressdev',
+        'cryptodev',
+        'dmadev',
+        'fib',
         'flow_classify',
+        'distributor',
+        'efd',
+        'eventdev',
         'gpudev',
+        'graph',
         'gro',
         'gso',
+        'ipsec',
         'kni',
         'jobstats',
         'latencystats',
+        'lpm',
+        'member',
+        'meter',
         'metrics',
+        'net',
         'node',
         'pdump',
         'pipeline',
         'port',
         'power',
+        'rawdev',
+        'regexdev',
+        'reorder',
+        'rib',
+        'sched',
+        'security',
+        'stack',
         'table',
         'vhost',
 ]
@@ -196,7 +219,7 @@ foreach l:libraries
     includes += include_directories(l)
     dpdk_includes += include_directories(l)
 
-    if developer_mode and is_windows and use_function_versioning
+    if developer_mode and use_function_versioning and (is_windows or is_darwin)
         message('@0@: Function versioning is not supported by Windows.'.format(name))
     endif
 
@@ -221,7 +244,7 @@ foreach l:libraries
             include_directories: includes,
             dependencies: static_deps)
 
-    if not use_function_versioning or is_windows
+    if not use_function_versioning or is_windows or is_darwin
         # use pre-build objects to build shared lib
         sources = []
         objs += static_lib.extract_all_objects(recursive: false)
@@ -254,8 +277,10 @@ foreach l:libraries
             lk_deps += [mingw_map]
 
             lk_args = ['-Wl,--version-script=' + mingw_map.full_path()]
-        else
+        elif not is_darwin
             lk_args = ['-Wl,--version-script=' + version_map]
+        else
+            lk_args = ['-Wl,-all_load']
         endif
     endif
 

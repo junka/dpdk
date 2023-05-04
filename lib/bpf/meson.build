@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2018 Intel Corporation
 
-if is_windows
+if is_windows or is_darwin
     build = false
     reason = 'not supported on Windows'
     subdir_done()

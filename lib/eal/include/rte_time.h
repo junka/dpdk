@@ -11,9 +11,9 @@ extern "C" {
 
 #include <stdint.h>
 #include <time.h>
-
+#ifndef NSEC_PER_SEC
 #define NSEC_PER_SEC             1000000000L
-
+#endif
 /**
  * Structure to hold the parameters of a running cycle counter to assist
  * in converting cycles to nanoseconds.

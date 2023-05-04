@@ -6369,7 +6369,7 @@ rte_eth_dev_pool_ops_supported(uint16_t port_id, const char *pool)
 
 	return ret;
 }
-
+#if !defined RTE_EXEC_ENV_DARWIN
 static int
 eth_dev_handle_port_list(const char *cmd __rte_unused,
 		const char *params __rte_unused,
@@ -6435,6 +6435,7 @@ eth_dev_handle_port_stats(const char *cmd __rte_unused,
 
 	return 0;
 }
+#endif
 
 static int
 eth_dev_parse_hide_zero(const char *key, const char *value, void *extra_args)
@@ -7023,7 +7024,7 @@ int rte_eth_dev_map_aggr_tx_affinity(uint16_t port_id, uint16_t tx_queue_id,
 }
 
 RTE_LOG_REGISTER_DEFAULT(rte_eth_dev_logtype, INFO);
-
+#if !defined RTE_EXEC_ENV_DARWIN
 RTE_INIT(ethdev_init_telemetry)
 {
 	rte_telemetry_register_cmd("/ethdev/list", eth_dev_handle_port_list,
@@ -7044,3 +7045,4 @@ RTE_INIT(ethdev_init_telemetry)
 	rte_telemetry_register_cmd("/ethdev/module_eeprom", eth_dev_handle_port_module_eeprom,
 			"Returns module EEPROM info with SFF specs. Parameters: int port_id");
 }
+#endif
