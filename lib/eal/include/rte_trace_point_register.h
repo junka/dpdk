@@ -19,7 +19,7 @@ extern "C" {
 RTE_DECLARE_PER_LCORE(volatile int, trace_point_sz);
 #ifdef __APPLE__
 #define RTE_TRACE_POINT_REGISTER(trace, name) \
-rte_trace_point_t __attribute__((section("__TEXT,_trace_point"))) __##trace; \
+rte_trace_point_t __##trace; \
 static const char __##trace##_name[] = RTE_STR(name); \
 RTE_INIT(trace##_init) \
 { \
