@@ -12,6 +12,7 @@
 #include "ethdev_driver.h"
 #include "sff_telemetry.h"
 
+#ifndef RTE_EXEC_ENV_DARWIN
 static const struct {
 	uint32_t capa;
 	const char *name;
@@ -1057,3 +1058,4 @@ RTE_INIT(ethdev_init_telemetry)
 	rte_telemetry_register_cmd("/ethdev/vlan", eth_dev_handle_port_vlan,
 			"Returns VLAN info for a port. Parameters: int port_id");
 }
+#endif
