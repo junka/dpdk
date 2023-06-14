@@ -27,7 +27,6 @@
 #define NIX_RX_REAS_F	   BIT(12)
 #define NIX_RX_VWQE_F	   BIT(13)
 #define NIX_RX_MULTI_SEG_F BIT(14)
-#define CPT_RX_WQE_F	   BIT(15)
 
 #define CNXK_NIX_CQ_ENTRY_SZ 128
 #define NIX_DESCS_PER_LOOP   4
@@ -211,6 +210,9 @@ nix_sec_attach_frags(const struct cpt_parse_hdr_s *hdr,
 		/* Update dynamic field with userdata */
 		*rte_security_dynfield(mbuf) = (uint64_t)inb_priv->userdata;
 
+		/* Mark frag as get */
+		RTE_MEMPOOL_CHECK_COOKIES(mbuf->pool, (void **)&mbuf, 1, 1);
+
 		cnxk_ip_reassembly_dynfield(mbuf, off)->nb_frags =
 			hdr->w0.num_frags - 2;
 		cnxk_ip_reassembly_dynfield(mbuf, off)->next_frag = NULL;
@@ -239,6 +241,9 @@ nix_sec_attach_frags(const struct cpt_parse_hdr_s *hdr,
 		/* Update dynamic field with userdata */
 		*rte_security_dynfield(mbuf) = (uint64_t)inb_priv->userdata;
 
+		/* Mark frag as get */
+		RTE_MEMPOOL_CHECK_COOKIES(mbuf->pool, (void **)&mbuf, 1, 1);
+
 		cnxk_ip_reassembly_dynfield(mbuf, off)->nb_frags =
 			hdr->w0.num_frags - 3;
 		cnxk_ip_reassembly_dynfield(mbuf, off)->next_frag = NULL;
@@ -262,6 +267,9 @@ nix_sec_attach_frags(const struct cpt_parse_hdr_s *hdr,
 		mbuf->pkt_len = frag_size;
 		mbuf->ol_flags = ol_flags;
 		mbuf->next = NULL;
+
+		/* Mark frag as get */
+		RTE_MEMPOOL_CHECK_COOKIES(mbuf->pool, (void **)&mbuf, 1, 1);
 
 		/* Update dynamic field with userdata */
 		*rte_security_dynfield(mbuf) = (uint64_t)inb_priv->userdata;

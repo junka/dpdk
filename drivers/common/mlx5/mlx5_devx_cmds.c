@@ -1062,6 +1062,8 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 	attr->cqe_compression = MLX5_GET(cmd_hca_cap, hcattr, cqe_compression);
 	attr->mini_cqe_resp_flow_tag = MLX5_GET(cmd_hca_cap, hcattr,
 						mini_cqe_resp_flow_tag);
+	attr->cqe_compression_128 = MLX5_GET(cmd_hca_cap, hcattr,
+						cqe_compression_128);
 	attr->mini_cqe_resp_l3_l4_tag = MLX5_GET(cmd_hca_cap, hcattr,
 						 mini_cqe_resp_l3_l4_tag);
 	attr->enhanced_cqe_compression = MLX5_GET(cmd_hca_cap, hcattr,
@@ -1076,6 +1078,9 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 					 general_obj_types) &
 			      MLX5_GENERAL_OBJ_TYPES_CAP_CONN_TRACK_OFFLOAD);
 	attr->rq_delay_drop = MLX5_GET(cmd_hca_cap, hcattr, rq_delay_drop);
+	attr->striding_rq = MLX5_GET(cmd_hca_cap, hcattr, striding_rq);
+	attr->ext_stride_num_range =
+		MLX5_GET(cmd_hca_cap, hcattr, ext_stride_num_range);
 	attr->max_flow_counter_15_0 = MLX5_GET(cmd_hca_cap, hcattr,
 			max_flow_counter_15_0);
 	attr->max_flow_counter_31_16 = MLX5_GET(cmd_hca_cap, hcattr,
@@ -1086,6 +1091,8 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 			flow_counter_access_aso);
 	attr->flow_access_aso_opc_mod = MLX5_GET(cmd_hca_cap, hcattr,
 			flow_access_aso_opc_mod);
+	attr->wqe_based_flow_table_sup = MLX5_GET(cmd_hca_cap, hcattr,
+			wqe_based_flow_table_update_cap);
 	/*
 	 * Flex item support needs max_num_prog_sample_field
 	 * from the Capabilities 2 table for PARSE_GRAPH_NODE
@@ -1293,6 +1300,24 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 	attr->rss_ind_tbl_cap = MLX5_GET
 					(per_protocol_networking_offload_caps,
 					 hcattr, rss_ind_tbl_cap);
+	attr->multi_pkt_send_wqe = MLX5_GET
+					(per_protocol_networking_offload_caps,
+					 hcattr, multi_pkt_send_wqe);
+	attr->enhanced_multi_pkt_send_wqe = MLX5_GET
+					(per_protocol_networking_offload_caps,
+					 hcattr, enhanced_multi_pkt_send_wqe);
+	if (attr->wqe_based_flow_table_sup) {
+		hcattr = mlx5_devx_get_hca_cap(ctx, in, out, &rc,
+				MLX5_GET_HCA_CAP_OP_MOD_WQE_BASED_FLOW_TABLE |
+				MLX5_HCA_CAP_OPMOD_GET_CUR);
+		if (!hcattr) {
+			DRV_LOG(DEBUG, "Failed to query WQE Based Flow table capabilities");
+			return rc;
+		}
+		attr->max_header_modify_pattern_length = MLX5_GET(wqe_based_flow_table_cap,
+								  hcattr,
+								  max_header_modify_pattern_length);
+	}
 	/* Query HCA attribute for ROCE. */
 	if (attr->roce) {
 		hcattr = mlx5_devx_get_hca_cap(ctx, in, out, &rc,

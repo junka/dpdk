@@ -18,10 +18,11 @@ iavf_rxq_rearm(struct iavf_rx_queue *rxq)
 
 #define PKTLEN_SHIFT     10
 
-static inline uint16_t
+static __rte_always_inline uint16_t
 _iavf_recv_raw_pkts_vec_avx2(struct iavf_rx_queue *rxq,
 			     struct rte_mbuf **rx_pkts,
-			     uint16_t nb_pkts, uint8_t *split_packet)
+			     uint16_t nb_pkts, uint8_t *split_packet,
+			     bool offload)
 {
 #define IAVF_DESCS_PER_LOOP_AVX 8
 
@@ -332,30 +333,34 @@ _iavf_recv_raw_pkts_vec_avx2(struct iavf_rx_queue *rxq,
 		 */
 		__m256i status0_7 = _mm256_unpacklo_epi64(status4_7,
 							  status0_3);
+		__m256i mbuf_flags = _mm256_set1_epi32(0);
 
-		/* now do flag manipulation */
+		if (offload) {
+			/* now do flag manipulation */
 
-		/* get only flag/error bits we want */
-		const __m256i flag_bits =
-			_mm256_and_si256(status0_7, flags_mask);
-		/* set vlan and rss flags */
-		const __m256i vlan_flags =
-			_mm256_shuffle_epi8(vlan_flags_shuf, flag_bits);
-		const __m256i rss_flags =
-			_mm256_shuffle_epi8(rss_flags_shuf,
-					    _mm256_srli_epi32(flag_bits, 11));
-		/**
-		 * l3_l4_error flags, shuffle, then shift to correct adjustment
-		 * of flags in flags_shuf, and finally mask out extra bits
-		 */
-		__m256i l3_l4_flags = _mm256_shuffle_epi8(l3_l4_flags_shuf,
-				_mm256_srli_epi32(flag_bits, 22));
-		l3_l4_flags = _mm256_slli_epi32(l3_l4_flags, 1);
-		l3_l4_flags = _mm256_and_si256(l3_l4_flags, cksum_mask);
+			/* get only flag/error bits we want */
+			const __m256i flag_bits =
+				_mm256_and_si256(status0_7, flags_mask);
+			/* set vlan and rss flags */
+			const __m256i vlan_flags =
+				_mm256_shuffle_epi8(vlan_flags_shuf, flag_bits);
+			const __m256i rss_flags =
+				_mm256_shuffle_epi8(rss_flags_shuf,
+						    _mm256_srli_epi32(flag_bits, 11));
+			/**
+			 * l3_l4_error flags, shuffle, then shift to correct adjustment
+			 * of flags in flags_shuf, and finally mask out extra bits
+			 */
+			__m256i l3_l4_flags = _mm256_shuffle_epi8(l3_l4_flags_shuf,
+					_mm256_srli_epi32(flag_bits, 22));
+			l3_l4_flags = _mm256_slli_epi32(l3_l4_flags, 1);
+			l3_l4_flags = _mm256_and_si256(l3_l4_flags, cksum_mask);
 
-		/* merge flags */
-		const __m256i mbuf_flags = _mm256_or_si256(l3_l4_flags,
-				_mm256_or_si256(rss_flags, vlan_flags));
+			/* merge flags */
+			mbuf_flags = _mm256_or_si256(l3_l4_flags,
+						     _mm256_or_si256(rss_flags, vlan_flags));
+		}
+
 		/**
 		 * At this point, we have the 8 sets of flags in the low 16-bits
 		 * of each 32-bit value in vlan0.
@@ -517,10 +522,11 @@ flex_rxd_to_fdir_flags_vec_avx2(const __m256i fdir_id0_7)
 	return fdir_flags;
 }
 
-static inline uint16_t
+static __rte_always_inline uint16_t
 _iavf_recv_raw_pkts_vec_avx2_flex_rxd(struct iavf_rx_queue *rxq,
 				      struct rte_mbuf **rx_pkts,
-				      uint16_t nb_pkts, uint8_t *split_packet)
+				      uint16_t nb_pkts, uint8_t *split_packet,
+				      bool offload)
 {
 #define IAVF_DESCS_PER_LOOP_AVX 8
 
@@ -808,6 +814,7 @@ _iavf_recv_raw_pkts_vec_avx2_flex_rxd(struct iavf_rx_queue *rxq,
 
 		mb6_7 = _mm256_add_epi16(mb6_7, crc_adjust);
 		mb4_5 = _mm256_add_epi16(mb4_5, crc_adjust);
+
 		/**
 		 * to get packet types, ptype is located in bit16-25
 		 * of each 128bits
@@ -868,50 +875,52 @@ _iavf_recv_raw_pkts_vec_avx2_flex_rxd(struct iavf_rx_queue *rxq,
 		 */
 		__m256i status0_7 = _mm256_unpacklo_epi64(status4_7,
 							  status0_3);
-
-		/* now do flag manipulation */
-
-		/* get only flag/error bits we want */
-		const __m256i flag_bits =
-			_mm256_and_si256(status0_7, flags_mask);
-		/**
-		 * l3_l4_error flags, shuffle, then shift to correct adjustment
-		 * of flags in flags_shuf, and finally mask out extra bits
-		 */
-		__m256i l3_l4_flags = _mm256_shuffle_epi8(l3_l4_flags_shuf,
-				_mm256_srli_epi32(flag_bits, 4));
-		l3_l4_flags = _mm256_slli_epi32(l3_l4_flags, 1);
-		__m256i l4_outer_mask = _mm256_set1_epi32(0x6);
-		__m256i l4_outer_flags =
-				_mm256_and_si256(l3_l4_flags, l4_outer_mask);
-		l4_outer_flags = _mm256_slli_epi32(l4_outer_flags, 20);
-
-		__m256i l3_l4_mask = _mm256_set1_epi32(~0x6);
-
-		l3_l4_flags = _mm256_and_si256(l3_l4_flags, l3_l4_mask);
-		l3_l4_flags = _mm256_or_si256(l3_l4_flags, l4_outer_flags);
-		l3_l4_flags = _mm256_and_si256(l3_l4_flags, cksum_mask);
-
-		/* set rss and vlan flags */
-		const __m256i rss_vlan_flag_bits =
-			_mm256_srli_epi32(flag_bits, 12);
-		const __m256i rss_flags =
-			_mm256_shuffle_epi8(rss_flags_shuf,
-					    rss_vlan_flag_bits);
-
+		__m256i mbuf_flags = _mm256_set1_epi32(0);
 		__m256i vlan_flags = _mm256_setzero_si256();
 
-		if (rxq->rx_flags == IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG1)
-			vlan_flags =
-				_mm256_shuffle_epi8(vlan_flags_shuf,
+		if (offload) {
+			/* now do flag manipulation */
+
+			/* get only flag/error bits we want */
+			const __m256i flag_bits =
+				_mm256_and_si256(status0_7, flags_mask);
+			/**
+			 * l3_l4_error flags, shuffle, then shift to correct adjustment
+			 * of flags in flags_shuf, and finally mask out extra bits
+			 */
+			__m256i l3_l4_flags = _mm256_shuffle_epi8(l3_l4_flags_shuf,
+					_mm256_srli_epi32(flag_bits, 4));
+			l3_l4_flags = _mm256_slli_epi32(l3_l4_flags, 1);
+			__m256i l4_outer_mask = _mm256_set1_epi32(0x6);
+			__m256i l4_outer_flags =
+					_mm256_and_si256(l3_l4_flags, l4_outer_mask);
+			l4_outer_flags = _mm256_slli_epi32(l4_outer_flags, 20);
+
+			__m256i l3_l4_mask = _mm256_set1_epi32(~0x6);
+
+			l3_l4_flags = _mm256_and_si256(l3_l4_flags, l3_l4_mask);
+			l3_l4_flags = _mm256_or_si256(l3_l4_flags, l4_outer_flags);
+			l3_l4_flags = _mm256_and_si256(l3_l4_flags, cksum_mask);
+
+			/* set rss and vlan flags */
+			const __m256i rss_vlan_flag_bits =
+				_mm256_srli_epi32(flag_bits, 12);
+			const __m256i rss_flags =
+				_mm256_shuffle_epi8(rss_flags_shuf,
 						    rss_vlan_flag_bits);
 
-		const __m256i rss_vlan_flags =
-			_mm256_or_si256(rss_flags, vlan_flags);
+			if (rxq->rx_flags == IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG1)
+				vlan_flags =
+					_mm256_shuffle_epi8(vlan_flags_shuf,
+							    rss_vlan_flag_bits);
 
-		/* merge flags */
-		__m256i mbuf_flags = _mm256_or_si256(l3_l4_flags,
-				rss_vlan_flags);
+			const __m256i rss_vlan_flags =
+				_mm256_or_si256(rss_flags, vlan_flags);
+
+			/* merge flags */
+			mbuf_flags = _mm256_or_si256(l3_l4_flags,
+					rss_vlan_flags);
+		}
 
 		if (rxq->fdir_enabled) {
 			const __m256i fdir_id4_7 =
@@ -955,176 +964,178 @@ _iavf_recv_raw_pkts_vec_avx2_flex_rxd(struct iavf_rx_queue *rxq,
 				_mm256_extract_epi32(fdir_id0_7, 4);
 		} /* if() on fdir_enabled */
 
+		if (offload) {
 #ifndef RTE_LIBRTE_IAVF_16BYTE_RX_DESC
-		/**
-		 * needs to load 2nd 16B of each desc for RSS hash parsing,
-		 * will cause performance drop to get into this context.
-		 */
-		if (offloads & RTE_ETH_RX_OFFLOAD_RSS_HASH ||
-		    rxq->rx_flags & IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG2_2) {
-			/* load bottom half of every 32B desc */
-			const __m128i raw_desc_bh7 =
-				_mm_load_si128
-					((void *)(&rxdp[7].wb.status_error1));
-			rte_compiler_barrier();
-			const __m128i raw_desc_bh6 =
-				_mm_load_si128
-					((void *)(&rxdp[6].wb.status_error1));
-			rte_compiler_barrier();
-			const __m128i raw_desc_bh5 =
-				_mm_load_si128
-					((void *)(&rxdp[5].wb.status_error1));
-			rte_compiler_barrier();
-			const __m128i raw_desc_bh4 =
-				_mm_load_si128
-					((void *)(&rxdp[4].wb.status_error1));
-			rte_compiler_barrier();
-			const __m128i raw_desc_bh3 =
-				_mm_load_si128
-					((void *)(&rxdp[3].wb.status_error1));
-			rte_compiler_barrier();
-			const __m128i raw_desc_bh2 =
-				_mm_load_si128
-					((void *)(&rxdp[2].wb.status_error1));
-			rte_compiler_barrier();
-			const __m128i raw_desc_bh1 =
-				_mm_load_si128
-					((void *)(&rxdp[1].wb.status_error1));
-			rte_compiler_barrier();
-			const __m128i raw_desc_bh0 =
-				_mm_load_si128
-					((void *)(&rxdp[0].wb.status_error1));
+			/**
+			 * needs to load 2nd 16B of each desc for RSS hash parsing,
+			 * will cause performance drop to get into this context.
+			 */
+			if (offloads & RTE_ETH_RX_OFFLOAD_RSS_HASH ||
+			    rxq->rx_flags & IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG2_2) {
+				/* load bottom half of every 32B desc */
+				const __m128i raw_desc_bh7 =
+					_mm_load_si128
+						((void *)(&rxdp[7].wb.status_error1));
+				rte_compiler_barrier();
+				const __m128i raw_desc_bh6 =
+					_mm_load_si128
+						((void *)(&rxdp[6].wb.status_error1));
+				rte_compiler_barrier();
+				const __m128i raw_desc_bh5 =
+					_mm_load_si128
+						((void *)(&rxdp[5].wb.status_error1));
+				rte_compiler_barrier();
+				const __m128i raw_desc_bh4 =
+					_mm_load_si128
+						((void *)(&rxdp[4].wb.status_error1));
+				rte_compiler_barrier();
+				const __m128i raw_desc_bh3 =
+					_mm_load_si128
+						((void *)(&rxdp[3].wb.status_error1));
+				rte_compiler_barrier();
+				const __m128i raw_desc_bh2 =
+					_mm_load_si128
+						((void *)(&rxdp[2].wb.status_error1));
+				rte_compiler_barrier();
+				const __m128i raw_desc_bh1 =
+					_mm_load_si128
+						((void *)(&rxdp[1].wb.status_error1));
+				rte_compiler_barrier();
+				const __m128i raw_desc_bh0 =
+					_mm_load_si128
+						((void *)(&rxdp[0].wb.status_error1));
 
-			__m256i raw_desc_bh6_7 =
-				_mm256_inserti128_si256
-					(_mm256_castsi128_si256(raw_desc_bh6),
-					raw_desc_bh7, 1);
-			__m256i raw_desc_bh4_5 =
-				_mm256_inserti128_si256
-					(_mm256_castsi128_si256(raw_desc_bh4),
-					raw_desc_bh5, 1);
-			__m256i raw_desc_bh2_3 =
-				_mm256_inserti128_si256
-					(_mm256_castsi128_si256(raw_desc_bh2),
-					raw_desc_bh3, 1);
-			__m256i raw_desc_bh0_1 =
-				_mm256_inserti128_si256
-					(_mm256_castsi128_si256(raw_desc_bh0),
-					raw_desc_bh1, 1);
+				__m256i raw_desc_bh6_7 =
+					_mm256_inserti128_si256
+						(_mm256_castsi128_si256(raw_desc_bh6),
+						raw_desc_bh7, 1);
+				__m256i raw_desc_bh4_5 =
+					_mm256_inserti128_si256
+						(_mm256_castsi128_si256(raw_desc_bh4),
+						raw_desc_bh5, 1);
+				__m256i raw_desc_bh2_3 =
+					_mm256_inserti128_si256
+						(_mm256_castsi128_si256(raw_desc_bh2),
+						raw_desc_bh3, 1);
+				__m256i raw_desc_bh0_1 =
+					_mm256_inserti128_si256
+						(_mm256_castsi128_si256(raw_desc_bh0),
+						raw_desc_bh1, 1);
 
-			if (offloads & RTE_ETH_RX_OFFLOAD_RSS_HASH) {
-				/**
-				 * to shift the 32b RSS hash value to the
-				 * highest 32b of each 128b before mask
-				 */
-				__m256i rss_hash6_7 =
-					_mm256_slli_epi64(raw_desc_bh6_7, 32);
-				__m256i rss_hash4_5 =
-					_mm256_slli_epi64(raw_desc_bh4_5, 32);
-				__m256i rss_hash2_3 =
-					_mm256_slli_epi64(raw_desc_bh2_3, 32);
-				__m256i rss_hash0_1 =
-					_mm256_slli_epi64(raw_desc_bh0_1, 32);
+				if (offloads & RTE_ETH_RX_OFFLOAD_RSS_HASH) {
+					/**
+					 * to shift the 32b RSS hash value to the
+					 * highest 32b of each 128b before mask
+					 */
+					__m256i rss_hash6_7 =
+						_mm256_slli_epi64(raw_desc_bh6_7, 32);
+					__m256i rss_hash4_5 =
+						_mm256_slli_epi64(raw_desc_bh4_5, 32);
+					__m256i rss_hash2_3 =
+						_mm256_slli_epi64(raw_desc_bh2_3, 32);
+					__m256i rss_hash0_1 =
+						_mm256_slli_epi64(raw_desc_bh0_1, 32);
 
-				const __m256i rss_hash_msk =
-					_mm256_set_epi32(0xFFFFFFFF, 0, 0, 0,
-							 0xFFFFFFFF, 0, 0, 0);
+					const __m256i rss_hash_msk =
+						_mm256_set_epi32(0xFFFFFFFF, 0, 0, 0,
+								 0xFFFFFFFF, 0, 0, 0);
 
-				rss_hash6_7 = _mm256_and_si256
-						(rss_hash6_7, rss_hash_msk);
-				rss_hash4_5 = _mm256_and_si256
-						(rss_hash4_5, rss_hash_msk);
-				rss_hash2_3 = _mm256_and_si256
-						(rss_hash2_3, rss_hash_msk);
-				rss_hash0_1 = _mm256_and_si256
-						(rss_hash0_1, rss_hash_msk);
+					rss_hash6_7 = _mm256_and_si256
+							(rss_hash6_7, rss_hash_msk);
+					rss_hash4_5 = _mm256_and_si256
+							(rss_hash4_5, rss_hash_msk);
+					rss_hash2_3 = _mm256_and_si256
+							(rss_hash2_3, rss_hash_msk);
+					rss_hash0_1 = _mm256_and_si256
+							(rss_hash0_1, rss_hash_msk);
 
-				mb6_7 = _mm256_or_si256(mb6_7, rss_hash6_7);
-				mb4_5 = _mm256_or_si256(mb4_5, rss_hash4_5);
-				mb2_3 = _mm256_or_si256(mb2_3, rss_hash2_3);
-				mb0_1 = _mm256_or_si256(mb0_1, rss_hash0_1);
-			}
+					mb6_7 = _mm256_or_si256(mb6_7, rss_hash6_7);
+					mb4_5 = _mm256_or_si256(mb4_5, rss_hash4_5);
+					mb2_3 = _mm256_or_si256(mb2_3, rss_hash2_3);
+					mb0_1 = _mm256_or_si256(mb0_1, rss_hash0_1);
+				}
 
-			if (rxq->rx_flags & IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG2_2) {
-				/* merge the status/error-1 bits into one register */
-				const __m256i status1_4_7 =
-					_mm256_unpacklo_epi32(raw_desc_bh6_7,
-							      raw_desc_bh4_5);
-				const __m256i status1_0_3 =
-					_mm256_unpacklo_epi32(raw_desc_bh2_3,
-							      raw_desc_bh0_1);
+				if (rxq->rx_flags & IAVF_RX_FLAGS_VLAN_TAG_LOC_L2TAG2_2) {
+					/* merge the status/error-1 bits into one register */
+					const __m256i status1_4_7 =
+						_mm256_unpacklo_epi32(raw_desc_bh6_7,
+								      raw_desc_bh4_5);
+					const __m256i status1_0_3 =
+						_mm256_unpacklo_epi32(raw_desc_bh2_3,
+								      raw_desc_bh0_1);
 
-				const __m256i status1_0_7 =
-					_mm256_unpacklo_epi64(status1_4_7,
-							      status1_0_3);
+					const __m256i status1_0_7 =
+						_mm256_unpacklo_epi64(status1_4_7,
+								      status1_0_3);
 
-				const __m256i l2tag2p_flag_mask =
-					_mm256_set1_epi32
-					(1 << IAVF_RX_FLEX_DESC_STATUS1_L2TAG2P_S);
+					const __m256i l2tag2p_flag_mask =
+						_mm256_set1_epi32
+						(1 << IAVF_RX_FLEX_DESC_STATUS1_L2TAG2P_S);
 
-				__m256i l2tag2p_flag_bits =
-					_mm256_and_si256
-					(status1_0_7, l2tag2p_flag_mask);
+					__m256i l2tag2p_flag_bits =
+						_mm256_and_si256
+						(status1_0_7, l2tag2p_flag_mask);
 
-				l2tag2p_flag_bits =
-					_mm256_srli_epi32(l2tag2p_flag_bits,
-						IAVF_RX_FLEX_DESC_STATUS1_L2TAG2P_S);
+					l2tag2p_flag_bits =
+						_mm256_srli_epi32(l2tag2p_flag_bits,
+							IAVF_RX_FLEX_DESC_STATUS1_L2TAG2P_S);
 
-				const __m256i l2tag2_flags_shuf =
-					_mm256_set_epi8(0, 0, 0, 0,
-							0, 0, 0, 0,
-							0, 0, 0, 0,
-							0, 0,
-							RTE_MBUF_F_RX_VLAN |
-							RTE_MBUF_F_RX_VLAN_STRIPPED,
-							0,
-							/* end up 128-bits */
-							0, 0, 0, 0,
-							0, 0, 0, 0,
-							0, 0, 0, 0,
-							0, 0,
-							RTE_MBUF_F_RX_VLAN |
-							RTE_MBUF_F_RX_VLAN_STRIPPED,
-							0);
+					const __m256i l2tag2_flags_shuf =
+						_mm256_set_epi8(0, 0, 0, 0,
+								0, 0, 0, 0,
+								0, 0, 0, 0,
+								0, 0,
+								RTE_MBUF_F_RX_VLAN |
+								RTE_MBUF_F_RX_VLAN_STRIPPED,
+								0,
+								/* end up 128-bits */
+								0, 0, 0, 0,
+								0, 0, 0, 0,
+								0, 0, 0, 0,
+								0, 0,
+								RTE_MBUF_F_RX_VLAN |
+								RTE_MBUF_F_RX_VLAN_STRIPPED,
+								0);
 
-				vlan_flags =
-					_mm256_shuffle_epi8(l2tag2_flags_shuf,
-							    l2tag2p_flag_bits);
+					vlan_flags =
+						_mm256_shuffle_epi8(l2tag2_flags_shuf,
+								    l2tag2p_flag_bits);
 
-				/* merge with vlan_flags */
-				mbuf_flags = _mm256_or_si256
-						(mbuf_flags, vlan_flags);
+					/* merge with vlan_flags */
+					mbuf_flags = _mm256_or_si256
+							(mbuf_flags, vlan_flags);
 
-				/* L2TAG2_2 */
-				__m256i vlan_tci6_7 =
-					_mm256_slli_si256(raw_desc_bh6_7, 4);
-				__m256i vlan_tci4_5 =
-					_mm256_slli_si256(raw_desc_bh4_5, 4);
-				__m256i vlan_tci2_3 =
-					_mm256_slli_si256(raw_desc_bh2_3, 4);
-				__m256i vlan_tci0_1 =
-					_mm256_slli_si256(raw_desc_bh0_1, 4);
+					/* L2TAG2_2 */
+					__m256i vlan_tci6_7 =
+						_mm256_slli_si256(raw_desc_bh6_7, 4);
+					__m256i vlan_tci4_5 =
+						_mm256_slli_si256(raw_desc_bh4_5, 4);
+					__m256i vlan_tci2_3 =
+						_mm256_slli_si256(raw_desc_bh2_3, 4);
+					__m256i vlan_tci0_1 =
+						_mm256_slli_si256(raw_desc_bh0_1, 4);
 
-				const __m256i vlan_tci_msk =
-					_mm256_set_epi32(0, 0xFFFF0000, 0, 0,
-							 0, 0xFFFF0000, 0, 0);
+					const __m256i vlan_tci_msk =
+						_mm256_set_epi32(0, 0xFFFF0000, 0, 0,
+								 0, 0xFFFF0000, 0, 0);
 
-				vlan_tci6_7 = _mm256_and_si256
-						(vlan_tci6_7, vlan_tci_msk);
-				vlan_tci4_5 = _mm256_and_si256
-						(vlan_tci4_5, vlan_tci_msk);
-				vlan_tci2_3 = _mm256_and_si256
-						(vlan_tci2_3, vlan_tci_msk);
-				vlan_tci0_1 = _mm256_and_si256
-						(vlan_tci0_1, vlan_tci_msk);
+					vlan_tci6_7 = _mm256_and_si256
+							(vlan_tci6_7, vlan_tci_msk);
+					vlan_tci4_5 = _mm256_and_si256
+							(vlan_tci4_5, vlan_tci_msk);
+					vlan_tci2_3 = _mm256_and_si256
+							(vlan_tci2_3, vlan_tci_msk);
+					vlan_tci0_1 = _mm256_and_si256
+							(vlan_tci0_1, vlan_tci_msk);
 
-				mb6_7 = _mm256_or_si256(mb6_7, vlan_tci6_7);
-				mb4_5 = _mm256_or_si256(mb4_5, vlan_tci4_5);
-				mb2_3 = _mm256_or_si256(mb2_3, vlan_tci2_3);
-				mb0_1 = _mm256_or_si256(mb0_1, vlan_tci0_1);
-			}
-		} /* if() on RSS hash parsing */
+					mb6_7 = _mm256_or_si256(mb6_7, vlan_tci6_7);
+					mb4_5 = _mm256_or_si256(mb4_5, vlan_tci4_5);
+					mb2_3 = _mm256_or_si256(mb2_3, vlan_tci2_3);
+					mb0_1 = _mm256_or_si256(mb0_1, vlan_tci0_1);
+				}
+			} /* if() on RSS hash parsing */
 #endif
+		}
 
 		/**
 		 * At this point, we have the 8 sets of flags in the low 16-bits
@@ -1277,7 +1288,16 @@ uint16_t
 iavf_recv_pkts_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
 			uint16_t nb_pkts)
 {
-	return _iavf_recv_raw_pkts_vec_avx2(rx_queue, rx_pkts, nb_pkts, NULL);
+	return _iavf_recv_raw_pkts_vec_avx2(rx_queue, rx_pkts, nb_pkts,
+					    NULL, false);
+}
+
+uint16_t
+iavf_recv_pkts_vec_avx2_offload(void *rx_queue, struct rte_mbuf **rx_pkts,
+				uint16_t nb_pkts)
+{
+	return _iavf_recv_raw_pkts_vec_avx2(rx_queue, rx_pkts, nb_pkts,
+					    NULL, true);
 }
 
 /**
@@ -1289,7 +1309,15 @@ iavf_recv_pkts_vec_avx2_flex_rxd(void *rx_queue, struct rte_mbuf **rx_pkts,
 				 uint16_t nb_pkts)
 {
 	return _iavf_recv_raw_pkts_vec_avx2_flex_rxd(rx_queue, rx_pkts,
-						     nb_pkts, NULL);
+						     nb_pkts, NULL, false);
+}
+
+uint16_t
+iavf_recv_pkts_vec_avx2_flex_rxd_offload(void *rx_queue, struct rte_mbuf **rx_pkts,
+					 uint16_t nb_pkts)
+{
+	return _iavf_recv_raw_pkts_vec_avx2_flex_rxd(rx_queue, rx_pkts,
+						     nb_pkts, NULL, true);
 }
 
 /**
@@ -1297,16 +1325,16 @@ iavf_recv_pkts_vec_avx2_flex_rxd(void *rx_queue, struct rte_mbuf **rx_pkts,
  * Notice:
  * - nb_pkts < IAVF_DESCS_PER_LOOP, just return no packet
  */
-static uint16_t
+static __rte_always_inline uint16_t
 iavf_recv_scattered_burst_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
-				   uint16_t nb_pkts)
+				   uint16_t nb_pkts, bool offload)
 {
 	struct iavf_rx_queue *rxq = rx_queue;
 	uint8_t split_flags[IAVF_VPMD_RX_MAX_BURST] = {0};
 
 	/* get some new buffers */
 	uint16_t nb_bufs = _iavf_recv_raw_pkts_vec_avx2(rxq, rx_pkts, nb_pkts,
-						       split_flags);
+						       split_flags, offload);
 	if (nb_bufs == 0)
 		return 0;
 
@@ -1339,22 +1367,44 @@ iavf_recv_scattered_burst_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
  * Notice:
  * - nb_pkts < IAVF_DESCS_PER_LOOP, just return no packet
  */
-uint16_t
-iavf_recv_scattered_pkts_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
-				  uint16_t nb_pkts)
+static __rte_always_inline uint16_t
+iavf_recv_scattered_pkts_vec_avx2_common(void *rx_queue, struct rte_mbuf **rx_pkts,
+					 uint16_t nb_pkts, bool offload)
 {
 	uint16_t retval = 0;
 
 	while (nb_pkts > IAVF_VPMD_RX_MAX_BURST) {
 		uint16_t burst = iavf_recv_scattered_burst_vec_avx2(rx_queue,
-				rx_pkts + retval, IAVF_VPMD_RX_MAX_BURST);
+				rx_pkts + retval, IAVF_VPMD_RX_MAX_BURST, offload);
 		retval += burst;
 		nb_pkts -= burst;
 		if (burst < IAVF_VPMD_RX_MAX_BURST)
 			return retval;
 	}
 	return retval + iavf_recv_scattered_burst_vec_avx2(rx_queue,
-				rx_pkts + retval, nb_pkts);
+				rx_pkts + retval, nb_pkts, offload);
+}
+
+uint16_t
+iavf_recv_scattered_pkts_vec_avx2(void *rx_queue,
+				  struct rte_mbuf **rx_pkts,
+				  uint16_t nb_pkts)
+{
+	return iavf_recv_scattered_pkts_vec_avx2_common(rx_queue,
+							rx_pkts,
+							nb_pkts,
+							false);
+}
+
+uint16_t
+iavf_recv_scattered_pkts_vec_avx2_offload(void *rx_queue,
+					  struct rte_mbuf **rx_pkts,
+					  uint16_t nb_pkts)
+{
+	return iavf_recv_scattered_pkts_vec_avx2_common(rx_queue,
+							rx_pkts,
+							nb_pkts,
+							true);
 }
 
 /**
@@ -1363,17 +1413,17 @@ iavf_recv_scattered_pkts_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
  * Notice:
  * - nb_pkts < IAVF_DESCS_PER_LOOP, just return no packet
  */
-static uint16_t
+static __rte_always_inline uint16_t
 iavf_recv_scattered_burst_vec_avx2_flex_rxd(void *rx_queue,
 					    struct rte_mbuf **rx_pkts,
-					    uint16_t nb_pkts)
+					    uint16_t nb_pkts, bool offload)
 {
 	struct iavf_rx_queue *rxq = rx_queue;
 	uint8_t split_flags[IAVF_VPMD_RX_MAX_BURST] = {0};
 
 	/* get some new buffers */
 	uint16_t nb_bufs = _iavf_recv_raw_pkts_vec_avx2_flex_rxd(rxq,
-					rx_pkts, nb_pkts, split_flags);
+					rx_pkts, nb_pkts, split_flags, offload);
 	if (nb_bufs == 0)
 		return 0;
 
@@ -1406,50 +1456,76 @@ iavf_recv_scattered_burst_vec_avx2_flex_rxd(void *rx_queue,
  * Notice:
  * - nb_pkts < IAVF_DESCS_PER_LOOP, just return no packet
  */
-uint16_t
-iavf_recv_scattered_pkts_vec_avx2_flex_rxd(void *rx_queue,
-					   struct rte_mbuf **rx_pkts,
-					   uint16_t nb_pkts)
+static __rte_always_inline uint16_t
+iavf_recv_scattered_pkts_vec_avx2_flex_rxd_common(void *rx_queue,
+						  struct rte_mbuf **rx_pkts,
+						  uint16_t nb_pkts, bool offload)
 {
 	uint16_t retval = 0;
 
 	while (nb_pkts > IAVF_VPMD_RX_MAX_BURST) {
 		uint16_t burst =
 			iavf_recv_scattered_burst_vec_avx2_flex_rxd
-			(rx_queue, rx_pkts + retval, IAVF_VPMD_RX_MAX_BURST);
+			(rx_queue, rx_pkts + retval, IAVF_VPMD_RX_MAX_BURST,
+			 offload);
 		retval += burst;
 		nb_pkts -= burst;
 		if (burst < IAVF_VPMD_RX_MAX_BURST)
 			return retval;
 	}
 	return retval + iavf_recv_scattered_burst_vec_avx2_flex_rxd(rx_queue,
-				rx_pkts + retval, nb_pkts);
+				rx_pkts + retval, nb_pkts, offload);
 }
 
-static inline void
+uint16_t
+iavf_recv_scattered_pkts_vec_avx2_flex_rxd(void *rx_queue,
+					   struct rte_mbuf **rx_pkts,
+					   uint16_t nb_pkts)
+{
+	return iavf_recv_scattered_pkts_vec_avx2_flex_rxd_common(rx_queue,
+								 rx_pkts,
+								 nb_pkts,
+								 false);
+}
+
+uint16_t
+iavf_recv_scattered_pkts_vec_avx2_flex_rxd_offload(void *rx_queue,
+						   struct rte_mbuf **rx_pkts,
+						   uint16_t nb_pkts)
+{
+	return iavf_recv_scattered_pkts_vec_avx2_flex_rxd_common(rx_queue,
+								 rx_pkts,
+								 nb_pkts,
+								 true);
+}
+
+
+static __rte_always_inline void
 iavf_vtx1(volatile struct iavf_tx_desc *txdp,
-	  struct rte_mbuf *pkt, uint64_t flags)
+	  struct rte_mbuf *pkt, uint64_t flags, bool offload)
 {
 	uint64_t high_qw =
 		(IAVF_TX_DESC_DTYPE_DATA |
 		 ((uint64_t)flags  << IAVF_TXD_QW1_CMD_SHIFT) |
 		 ((uint64_t)pkt->data_len << IAVF_TXD_QW1_TX_BUF_SZ_SHIFT));
+	if (offload)
+		iavf_txd_enable_offload(pkt, &high_qw);
 
 	__m128i descriptor = _mm_set_epi64x(high_qw,
 				pkt->buf_iova + pkt->data_off);
 	_mm_store_si128((__m128i *)txdp, descriptor);
 }
 
-static inline void
+static __rte_always_inline void
 iavf_vtx(volatile struct iavf_tx_desc *txdp,
-	 struct rte_mbuf **pkt, uint16_t nb_pkts,  uint64_t flags)
+	 struct rte_mbuf **pkt, uint16_t nb_pkts,  uint64_t flags, bool offload)
 {
 	const uint64_t hi_qw_tmpl = (IAVF_TX_DESC_DTYPE_DATA |
 			((uint64_t)flags  << IAVF_TXD_QW1_CMD_SHIFT));
 
 	/* if unaligned on 32-bit boundary, do one to align */
 	if (((uintptr_t)txdp & 0x1F) != 0 && nb_pkts != 0) {
-		iavf_vtx1(txdp, *pkt, flags);
+		iavf_vtx1(txdp, *pkt, flags, offload);
 		nb_pkts--, txdp++, pkt++;
 	}
 
@@ -1459,18 +1535,26 @@ iavf_vtx(volatile struct iavf_tx_desc *txdp,
 			hi_qw_tmpl |
 			((uint64_t)pkt[3]->data_len <<
 			 IAVF_TXD_QW1_TX_BUF_SZ_SHIFT);
+		if (offload)
+			iavf_txd_enable_offload(pkt[3], &hi_qw3);
 		uint64_t hi_qw2 =
 			hi_qw_tmpl |
 			((uint64_t)pkt[2]->data_len <<
 			 IAVF_TXD_QW1_TX_BUF_SZ_SHIFT);
+		if (offload)
+			iavf_txd_enable_offload(pkt[2], &hi_qw2);
 		uint64_t hi_qw1 =
 			hi_qw_tmpl |
 			((uint64_t)pkt[1]->data_len <<
 			 IAVF_TXD_QW1_TX_BUF_SZ_SHIFT);
+		if (offload)
+			iavf_txd_enable_offload(pkt[1], &hi_qw1);
 		uint64_t hi_qw0 =
 			hi_qw_tmpl |
 			((uint64_t)pkt[0]->data_len <<
 			 IAVF_TXD_QW1_TX_BUF_SZ_SHIFT);
+		if (offload)
+			iavf_txd_enable_offload(pkt[0], &hi_qw0);
 
 		__m256i desc2_3 =
 			_mm256_set_epi64x
@@ -1490,14 +1574,14 @@ iavf_vtx(volatile struct iavf_tx_desc *txdp,
 
 	/* do any last ones */
 	while (nb_pkts) {
-		iavf_vtx1(txdp, *pkt, flags);
+		iavf_vtx1(txdp, *pkt, flags, offload);
 		txdp++, pkt++, nb_pkts--;
 	}
 }
 
-static inline uint16_t
+static __rte_always_inline uint16_t
 iavf_xmit_fixed_burst_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
-			       uint16_t nb_pkts)
+			       uint16_t nb_pkts, bool offload)
 {
 	struct iavf_tx_queue *txq = (struct iavf_tx_queue *)tx_queue;
 	volatile struct iavf_tx_desc *txdp;
@@ -1524,11 +1608,11 @@ iavf_xmit_fixed_burst_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 	if (nb_commit >= n) {
 		tx_backlog_entry(txep, tx_pkts, n);
 
-		iavf_vtx(txdp, tx_pkts, n - 1, flags);
+		iavf_vtx(txdp, tx_pkts, n - 1, flags, offload);
 		tx_pkts += (n - 1);
 		txdp += (n - 1);
 
-		iavf_vtx1(txdp, *tx_pkts++, rs);
+		iavf_vtx1(txdp, *tx_pkts++, rs, offload);
 
 		nb_commit = (uint16_t)(nb_commit - n);
 
@@ -1542,7 +1626,7 @@ iavf_xmit_fixed_burst_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 
 	tx_backlog_entry(txep, tx_pkts, nb_commit);
 
-	iavf_vtx(txdp, tx_pkts, nb_commit, flags);
+	iavf_vtx(txdp, tx_pkts, nb_commit, flags, offload);
 
 	tx_id = (uint16_t)(tx_id + nb_commit);
 	if (tx_id > txq->next_rs) {
@@ -1560,9 +1644,9 @@ iavf_xmit_fixed_burst_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 	return nb_pkts;
 }
 
-uint16_t
-iavf_xmit_pkts_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
-			uint16_t nb_pkts)
+static __rte_always_inline uint16_t
+iavf_xmit_pkts_vec_avx2_common(void *tx_queue, struct rte_mbuf **tx_pkts,
+			       uint16_t nb_pkts, bool offload)
 {
 	uint16_t nb_tx = 0;
 	struct iavf_tx_queue *txq = (struct iavf_tx_queue *)tx_queue;
@@ -1573,7 +1657,7 @@ iavf_xmit_pkts_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 		/* cross rs_thresh boundary is not allowed */
 		num = (uint16_t)RTE_MIN(nb_pkts, txq->rs_thresh);
 		ret = iavf_xmit_fixed_burst_vec_avx2(tx_queue, &tx_pkts[nb_tx],
-						     num);
+						     num, offload);
 		nb_tx += ret;
 		nb_pkts -= ret;
 		if (ret < num)
@@ -1581,4 +1665,18 @@ iavf_xmit_pkts_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 	}
 
 	return nb_tx;
+}
+
+uint16_t
+iavf_xmit_pkts_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
+			uint16_t nb_pkts)
+{
+	return iavf_xmit_pkts_vec_avx2_common(tx_queue, tx_pkts, nb_pkts, false);
+}
+
+uint16_t
+iavf_xmit_pkts_vec_avx2_offload(void *tx_queue, struct rte_mbuf **tx_pkts,
+				uint16_t nb_pkts)
+{
+	return iavf_xmit_pkts_vec_avx2_common(tx_queue, tx_pkts, nb_pkts, true);
 }

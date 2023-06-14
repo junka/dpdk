@@ -22,9 +22,6 @@ cn10k_wqe_to_mbuf(uint64_t wqe, const uint64_t __mbuf, uint8_t port_id,
 				   (flags & NIX_RX_OFFLOAD_TSTAMP_F ? 8 : 0);
 	struct rte_mbuf *mbuf = (struct rte_mbuf *)__mbuf;
 
-	/* Mark mempool obj as "get" as it is alloc'ed by NIX */
-	RTE_MEMPOOL_CHECK_COOKIES(mbuf->pool, (void **)&mbuf, 1, 1);
-
 	cn10k_nix_cqe_to_mbuf((struct nix_cqe_hdr_s *)wqe, tag,
 			      (struct rte_mbuf *)mbuf, lookup_mem,
 			      mbuf_init | ((uint64_t)port_id) << 48, flags);
@@ -154,11 +151,9 @@ cn10k_sso_hws_post_process(struct cn10k_sso_hws *ws, uint64_t *u64,
 {
 	u64[0] = (u64[0] & (0x3ull << 32)) << 6 |
 		 (u64[0] & (0x3FFull << 36)) << 4 | (u64[0] & 0xffffffff);
-	if ((flags & CPT_RX_WQE_F) &&
-	    (CNXK_EVENT_TYPE_FROM_TAG(u64[0]) == RTE_EVENT_TYPE_CRYPTODEV)) {
+	if (CNXK_EVENT_TYPE_FROM_TAG(u64[0]) == RTE_EVENT_TYPE_CRYPTODEV) {
 		u64[1] = cn10k_cpt_crypto_adapter_dequeue(u64[1]);
-	} else if ((flags & CPT_RX_WQE_F) &&
-		   (CNXK_EVENT_TYPE_FROM_TAG(u64[0]) == RTE_EVENT_TYPE_CRYPTODEV_VECTOR)) {
+	} else if (CNXK_EVENT_TYPE_FROM_TAG(u64[0]) == RTE_EVENT_TYPE_CRYPTODEV_VECTOR) {
 		u64[1] = cn10k_cpt_crypto_adapter_vector_dequeue(u64[1]);
 	} else if (CNXK_EVENT_TYPE_FROM_TAG(u64[0]) == RTE_EVENT_TYPE_ETHDEV) {
 		uint8_t port = CNXK_SUB_EVENT_FROM_TAG(u64[0]);
@@ -166,7 +161,15 @@ cn10k_sso_hws_post_process(struct cn10k_sso_hws *ws, uint64_t *u64,
 
 		mbuf = u64[1] - sizeof(struct rte_mbuf);
 		rte_prefetch0((void *)mbuf);
+
+		/* Mark mempool obj as "get" as it is alloc'ed by NIX */
+		RTE_MEMPOOL_CHECK_COOKIES(((struct rte_mbuf *)mbuf)->pool, (void **)&mbuf, 1, 1);
+
 		if (flags & NIX_RX_OFFLOAD_SECURITY_F) {
+			void *lookup_mem = ws->lookup_mem;
+			struct rte_mempool *mp = NULL;
+			uint64_t meta_aura;
+
 			const uint64_t mbuf_init =
 				0x100010000ULL | RTE_PKTMBUF_HEADROOM |
 				(flags & NIX_RX_OFFLOAD_TSTAMP_F ? 8 : 0);
@@ -191,8 +194,11 @@ cn10k_sso_hws_post_process(struct cn10k_sso_hws *ws, uint64_t *u64,
 				cq_w1, cq_w5, sa_base, (uintptr_t)&iova, &loff,
 				(struct rte_mbuf *)mbuf, d_off, flags,
 				mbuf_init | ((uint64_t)port) << 48);
+			mp = (struct rte_mempool *)cnxk_nix_inl_metapool_get(port, lookup_mem);
+			meta_aura = mp ? mp->pool_id : m->pool->pool_id;
+
 			if (loff)
-				roc_npa_aura_op_free(m->pool->pool_id, 0, iova);
+				roc_npa_aura_op_free(meta_aura, 0, iova);
 		}
 
 		u64[0] = CNXK_CLR_SUB_EVENT(u64[0]);
@@ -282,6 +288,9 @@ cn10k_sso_hws_get_work_empty(struct cn10k_sso_hws *ws, struct rte_event *ev,
 	ws->gw_rdata = gw.u64[0];
 	if (gw.u64[1])
 		cn10k_sso_hws_post_process(ws, gw.u64, flags);
+	else
+		gw.u64[0] = (gw.u64[0] & (0x3ull << 32)) << 6 |
+			    (gw.u64[0] & (0x3FFull << 36)) << 4 | (gw.u64[0] & 0xffffffff);
 
 	ev->event = gw.u64[0];
 	ev->u64 = gw.u64[1];
@@ -402,8 +411,6 @@ NIX_RX_FASTPATH_MODES
 	}
 
 #define SSO_DEQ_SEG(fn, flags)	  SSO_DEQ(fn, flags | NIX_RX_MULTI_SEG_F)
-#define SSO_DEQ_CA(fn, flags)	  SSO_DEQ(fn, flags | CPT_RX_WQE_F)
-#define SSO_DEQ_CA_SEG(fn, flags) SSO_DEQ_SEG(fn, flags | CPT_RX_WQE_F)
 
 #define SSO_DEQ_TMO(fn, flags)                                                 \
 	uint16_t __rte_hot fn(void *port, struct rte_event *ev,                \
@@ -425,8 +432,6 @@ NIX_RX_FASTPATH_MODES
 	}
 
 #define SSO_DEQ_TMO_SEG(fn, flags)    SSO_DEQ_TMO(fn, flags | NIX_RX_MULTI_SEG_F)
-#define SSO_DEQ_TMO_CA(fn, flags)     SSO_DEQ_TMO(fn, flags | CPT_RX_WQE_F)
-#define SSO_DEQ_TMO_CA_SEG(fn, flags) SSO_DEQ_TMO_SEG(fn, flags | CPT_RX_WQE_F)
 
 #define SSO_CMN_DEQ_BURST(fnb, fn, flags)                                      \
 	uint16_t __rte_hot fnb(void *port, struct rte_event ev[],              \

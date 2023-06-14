@@ -1916,6 +1916,7 @@ enum rte_eth_fec_mode {
 	RTE_ETH_FEC_AUTO,	    /**< FEC autonegotiation modes */
 	RTE_ETH_FEC_BASER,          /**< FEC using common algorithm */
 	RTE_ETH_FEC_RS,             /**< FEC using RS algorithm */
+	RTE_ETH_FEC_LLRS,           /**< FEC using LLRS algorithm */
 };
 
 /* Translate from FEC mode to FEC capa */
@@ -2664,6 +2665,44 @@ int rte_eth_dev_socket_id(uint16_t port_id);
  *   - 1 if device is attached
  */
 int rte_eth_dev_is_valid_port(uint16_t port_id);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice.
+ *
+ * Check if Rx queue is valid.
+ * If the queue has been setup, it is considered valid.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_id
+ *   The index of the receive queue.
+ * @return
+ *   - -ENODEV: if port_id is invalid.
+ *   - -EINVAL: if queue_id is out of range or queue has not been setup.
+ *   - 0 if Rx queue is valid.
+ */
+__rte_experimental
+int rte_eth_dev_is_valid_rxq(uint16_t port_id, uint16_t queue_id);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice.
+ *
+ * Check if Tx queue is valid.
+ * If the queue has been setup, it is considered valid.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_id
+ *   The index of the transmit queue.
+ * @return
+ *   - -ENODEV: if port_id is invalid.
+ *   - -EINVAL: if queue_id is out of range or queue has not been setup.
+ *   - 0 if Tx queue is valid.
+ */
+__rte_experimental
+int rte_eth_dev_is_valid_txq(uint16_t port_id, uint16_t queue_id);
 
 /**
  * Start specified Rx queue of a port. It is used when rx_deferred_start
@@ -4381,6 +4420,9 @@ int rte_eth_dev_mac_addr_remove(uint16_t port_id,
 
 /**
  * Set the default MAC address.
+ * It replaces the address at index 0 of the MAC address list.
+ * If the address was already in the MAC address list,
+ * please remove it first.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.
@@ -4391,6 +4433,7 @@ int rte_eth_dev_mac_addr_remove(uint16_t port_id,
  *   - (-ENOTSUP) if hardware doesn't support.
  *   - (-ENODEV) if *port* invalid.
  *   - (-EINVAL) if MAC address is invalid.
+ *   - (-EEXIST) if MAC address was already in the address list.
  */
 int rte_eth_dev_default_mac_addr_set(uint16_t port_id,
 		struct rte_ether_addr *mac_addr);

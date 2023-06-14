@@ -1157,6 +1157,7 @@ enum {
 	MLX5_CMD_OP_CREATE_RQT = 0x916,
 	MLX5_CMD_OP_MODIFY_RQT = 0x917,
 	MLX5_CMD_OP_CREATE_FLOW_TABLE = 0x930,
+	MLX5_CMD_OP_QUERY_FLOW_TABLE = 0x932,
 	MLX5_CMD_OP_CREATE_FLOW_GROUP = 0x933,
 	MLX5_CMD_OP_SET_FLOW_TABLE_ENTRY = 0x936,
 	MLX5_CMD_OP_MODIFY_FLOW_TABLE = 0x93c,
@@ -2289,7 +2290,8 @@ struct mlx5_ifc_wqe_based_flow_table_cap_bits {
 	u8 rtc_index_mode[0x5];
 	u8 reserved_at_58[0x3];
 	u8 rtc_log_depth_max[0x5];
-	u8 reserved_at_60[0x10];
+	u8 reserved_at_60[0x8];
+	u8 max_header_modify_pattern_length[0x8];
 	u8 ste_format[0x10];
 	u8 stc_action_type[0x80];
 	u8 header_insert_type[0x10];
@@ -3949,6 +3951,8 @@ enum mlx5_aso_op {
 	ASO_OPER_LOGICAL_OR = 0x1,
 };
 
+#define MLX5_ASO_CSEG_READ_ENABLE 1
+
 /* ASO WQE CTRL segment. */
 struct mlx5_aso_cseg {
 	uint32_t va_h;
@@ -3962,6 +3966,8 @@ struct mlx5_aso_cseg {
 	uint64_t bitwise_data;
 	uint64_t data_mask;
 } __rte_packed;
+
+#define MLX5_MTR_MAX_TOKEN_VALUE INT32_MAX
 
 /* A meter data segment - 2 per ASO WQE. */
 struct mlx5_aso_mtr_dseg {
@@ -4882,11 +4888,17 @@ struct mlx5_ifc_flow_table_context_bits {
 
 	u8 reserved_at_60[0x60];
 
-	u8 rtc_id_0[0x20];
-
-	u8 rtc_id_1[0x20];
-
-	u8 reserved_at_100[0x40];
+	union {
+		struct {
+			u8 rtc_id_0[0x20];
+			u8 rtc_id_1[0x20];
+			u8 reserved_at_100[0x40];
+		};
+		struct {
+			u8 sw_owner_icm_root_1[0x40];
+			u8 sw_owner_icm_root_0[0x40];
+		};
+	};
 };
 
 struct mlx5_ifc_create_flow_table_in_bits {
@@ -4919,12 +4931,52 @@ struct mlx5_ifc_create_flow_table_out_bits {
 	u8 icm_address_31_0[0x20];
 };
 
-enum mlx5_flow_destination_type {
-	MLX5_FLOW_DESTINATION_TYPE_VPORT = 0x0,
+struct mlx5_ifc_query_flow_table_in_bits {
+	u8 opcode[0x10];
+	u8 uid[0x10];
+
+	u8 vhca_tunnel_id[0x10];
+	u8 op_mod[0x10];
+
+	u8 other_vport[0x1];
+	u8 reserved_at_41[0xf];
+	u8 vport_number[0x10];
+
+	u8 reserved_at_60[0x20];
+
+	u8 table_type[0x8];
+	u8 reserved_at_88[0x18];
+
+	u8 reserved_at_a0[0x8];
+	u8 table_id[0x18];
+
+	u8 reserved_at_c0[0x140];
 };
 
-enum {
-	MLX5_FLOW_CONTEXT_ACTION_FWD_DEST  = 0x4,
+struct mlx5_ifc_query_flow_table_out_bits {
+	u8 status[0x8];
+	u8 reserved_at_8[0x18];
+
+	u8 syndrome[0x20];
+
+	u8 reserved_at_40[0x80];
+
+	struct mlx5_ifc_flow_table_context_bits flow_table_context;
+};
+
+enum mlx5_flow_destination_type {
+	MLX5_FLOW_DESTINATION_TYPE_VPORT = 0x0,
+	MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE = 0x1,
+};
+
+enum mlx5_flow_context_action {
+	MLX5_FLOW_CONTEXT_ACTION_FWD_DEST = 1 << 2,
+};
+
+enum mlx5_flow_context_flow_source {
+	MLX5_FLOW_CONTEXT_FLOW_SOURCE_ANY_VPORT = 0x0,
+	MLX5_FLOW_CONTEXT_FLOW_SOURCE_UPLINK = 0x1,
+	MLX5_FLOW_CONTEXT_FLOW_SOURCE_LOCAL_VPORT = 0x2,
 };
 
 struct mlx5_ifc_set_fte_out_bits {
@@ -4962,11 +5014,16 @@ struct mlx5_ifc_flow_context_bits {
 	u8 reserved_at_60[0x10];
 	u8 action[0x10];
 	u8 extended_destination[0x1];
-	u8 reserved_at_81[0x7];
+	u8 reserved_at_81[0x1];
+	u8 flow_source[0x2];
+	u8 encrypt_decrypt_type[0x4];
 	u8 destination_list_size[0x18];
 	u8 reserved_at_a0[0x8];
 	u8 flow_counter_list_size[0x18];
-	u8 reserved_at_c0[0x1740];
+	u8 packet_reformat_id[0x20];
+	u8 reserved_at_e0[0x40];
+	u8 encrypt_decrypt_obj_id[0x20];
+	u8 reserved_at_140[0x16c0];
 	/* Currently only one destnation */
 	union mlx5_ifc_dest_format_flow_counter_list_auto_bits destination[1];
 };

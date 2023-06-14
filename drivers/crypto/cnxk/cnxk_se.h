@@ -31,6 +31,7 @@ struct cnxk_se_sess {
 	uint16_t cpt_op : 4;
 	uint16_t zsk_flag : 4;
 	uint16_t aes_gcm : 1;
+	uint16_t aes_ccm : 1;
 	uint16_t aes_ctr : 1;
 	uint16_t chacha_poly : 1;
 	uint16_t is_null : 1;
@@ -44,7 +45,8 @@ struct cnxk_se_sess {
 	uint16_t aad_length;
 	uint8_t is_sha3 : 1;
 	uint8_t short_iv : 1;
-	uint8_t rsvd : 6;
+	uint8_t is_sm3 : 1;
+	uint8_t rsvd : 5;
 	uint8_t mac_len;
 	uint8_t iv_length;
 	uint8_t auth_iv_length;
@@ -199,6 +201,9 @@ cpt_mac_len_verify(struct rte_crypto_auth_xform *auth)
 	case RTE_CRYPTO_AUTH_SHAKE_256:
 		ret = (mac_len <= UINT8_MAX) ? 0 : -1;
 		break;
+	case RTE_CRYPTO_AUTH_SM3:
+		ret = (mac_len <= 32) ? 0 : -1;
+		break;
 	case RTE_CRYPTO_AUTH_NULL:
 		ret = 0;
 		break;
@@ -221,10 +226,10 @@ sg_inst_prep(struct roc_se_fc_params *params, struct cpt_inst_s *inst, uint64_t 
 	uint32_t mac_len = 0, aad_len = 0;
 	struct roc_se_ctx *se_ctx;
 	uint32_t i, g_size_bytes;
+	int zsk_flags, ret = 0;
 	uint64_t *offset_vaddr;
 	uint32_t s_size_bytes;
 	uint8_t *in_buffer;
-	int zsk_flags;
 	uint32_t size;
 	uint8_t *iv_d;
 
@@ -391,8 +396,13 @@ sg_inst_prep(struct roc_se_fc_params *params, struct cpt_inst_s *inst, uint64_t 
 	/* This is DPTR len in case of SG mode */
 	inst->w4.s.dlen = size;
 
+	if (unlikely(size > ROC_SG_MAX_DLEN_SIZE)) {
+		plt_dp_err("Exceeds max supported components. Reduce segments");
+		ret = -1;
+	}
+
 	inst->dptr = (uint64_t)in_buffer;
-	return 0;
+	return ret;
 }
 
 static __rte_always_inline int
@@ -405,12 +415,13 @@ sg2_inst_prep(struct roc_se_fc_params *params, struct cpt_inst_s *inst, uint64_t
 	void *m_vaddr = params->meta_buf.vaddr;
 	struct roc_se_buf_ptr *aad_buf = NULL;
 	uint32_t mac_len = 0, aad_len = 0;
+	uint16_t scatter_sz, gather_sz;
 	union cpt_inst_w5 cpt_inst_w5;
 	union cpt_inst_w6 cpt_inst_w6;
 	struct roc_se_ctx *se_ctx;
 	uint32_t i, g_size_bytes;
 	uint64_t *offset_vaddr;
-	int zsk_flags;
+	int zsk_flags, ret = 0;
 	uint32_t size;
 	uint8_t *iv_d;
 
@@ -430,6 +441,9 @@ sg2_inst_prep(struct roc_se_fc_params *params, struct cpt_inst_s *inst, uint64_t
 	m_vaddr = (uint8_t *)m_vaddr + ROC_SE_OFF_CTRL_LEN + RTE_ALIGN_CEIL(iv_len, 8);
 
 	inst->w4.s.opcode_major |= (uint64_t)ROC_DMA_MODE_SG;
+
+	/* This is DPTR len in case of SG mode */
+	inst->w4.s.dlen = inputlen + ROC_SE_OFF_CTRL_LEN;
 
 	/* iv offset is 0 */
 	*offset_vaddr = offset_ctrl;
@@ -501,9 +515,9 @@ sg2_inst_prep(struct roc_se_fc_params *params, struct cpt_inst_s *inst, uint64_t
 		}
 	}
 
-	cpt_inst_w5.s.gather_sz = ((i + 2) / 3);
+	gather_sz = (i + 2) / 3;
+	g_size_bytes = gather_sz * sizeof(struct roc_sg2list_comp);
 
-	g_size_bytes = ((i + 2) / 3) * sizeof(struct roc_sg2list_comp);
 	/*
 	 * Output Scatter List
 	 */
@@ -569,17 +583,23 @@ sg2_inst_prep(struct roc_se_fc_params *params, struct cpt_inst_s *inst, uint64_t
 		}
 	}
 
-	cpt_inst_w6.s.scatter_sz = ((i + 2) / 3);
+	scatter_sz = (i + 2) / 3;
 
-	/* This is DPTR len in case of SG mode */
-	inst->w4.s.dlen = inputlen + ROC_SE_OFF_CTRL_LEN;
+	cpt_inst_w5.s.gather_sz = gather_sz;
+	cpt_inst_w6.s.scatter_sz = scatter_sz;
 
 	cpt_inst_w5.s.dptr = (uint64_t)gather_comp;
 	cpt_inst_w6.s.rptr = (uint64_t)scatter_comp;
 
 	inst->w5.u64 = cpt_inst_w5.u64;
 	inst->w6.u64 = cpt_inst_w6.u64;
-	return 0;
+
+	if (unlikely((scatter_sz >> 4) || (gather_sz >> 4))) {
+		plt_dp_err("Exceeds max supported components. Reduce segments");
+		ret = -1;
+	}
+
+	return ret;
 }
 
 static __rte_always_inline int
@@ -595,6 +615,7 @@ cpt_digest_gen_sg_ver1_prep(uint32_t flags, uint64_t d_lens, struct roc_se_fc_pa
 	struct roc_se_ctx *ctx;
 	uint8_t *in_buffer;
 	uint32_t size, i;
+	int ret = 0;
 
 	ctx = params->ctx;
 
@@ -603,8 +624,7 @@ cpt_digest_gen_sg_ver1_prep(uint32_t flags, uint64_t d_lens, struct roc_se_fc_pa
 	key_len = ctx->auth_key_len;
 	data_len = ROC_SE_AUTH_DLEN(d_lens);
 
-	/*GP op header */
-	cpt_inst_w4.s.opcode_minor = 0;
+	cpt_inst_w4.u64 = ctx->template_w4.u64;
 	cpt_inst_w4.s.param2 = ((uint16_t)hash_type << 8) | mac_len;
 	if (ctx->hmac) {
 		cpt_inst_w4.s.opcode_major = ROC_SE_MAJOR_OP_HMAC | ROC_DMA_MODE_SG;
@@ -689,22 +709,27 @@ cpt_digest_gen_sg_ver1_prep(uint32_t flags, uint64_t d_lens, struct roc_se_fc_pa
 
 	size = g_size_bytes + s_size_bytes + ROC_SG_LIST_HDR_SIZE;
 
+	if (unlikely(size > ROC_SG_MAX_DLEN_SIZE)) {
+		plt_dp_err("Exceeds max supported components. Reduce segments");
+		ret = -1;
+	}
+
 	/* This is DPTR len in case of SG mode */
 	cpt_inst_w4.s.dlen = size;
 
 	inst->dptr = (uint64_t)in_buffer;
 	inst->w4.u64 = cpt_inst_w4.u64;
 
-	return 0;
+	return ret;
 }
 
 static __rte_always_inline int
 cpt_digest_gen_sg_ver2_prep(uint32_t flags, uint64_t d_lens, struct roc_se_fc_params *params,
 			    struct cpt_inst_s *inst)
 {
+	uint16_t data_len, mac_len, key_len, scatter_sz, gather_sz;
 	struct roc_sg2list_comp *gather_comp, *scatter_comp;
 	void *m_vaddr = params->meta_buf.vaddr;
-	uint16_t data_len, mac_len, key_len;
 	union cpt_inst_w4 cpt_inst_w4;
 	union cpt_inst_w5 cpt_inst_w5;
 	union cpt_inst_w6 cpt_inst_w6;
@@ -712,6 +737,7 @@ cpt_digest_gen_sg_ver2_prep(uint32_t flags, uint64_t d_lens, struct roc_se_fc_pa
 	struct roc_se_ctx *ctx;
 	uint32_t g_size_bytes;
 	uint32_t size, i;
+	int ret = 0;
 
 	ctx = params->ctx;
 
@@ -720,8 +746,7 @@ cpt_digest_gen_sg_ver2_prep(uint32_t flags, uint64_t d_lens, struct roc_se_fc_pa
 	key_len = ctx->auth_key_len;
 	data_len = ROC_SE_AUTH_DLEN(d_lens);
 
-	/*GP op header */
-	cpt_inst_w4.s.opcode_minor = 0;
+	cpt_inst_w4.u64 = ctx->template_w4.u64;
 	cpt_inst_w4.s.param2 = ((uint16_t)hash_type << 8) | mac_len;
 	if (ctx->hmac) {
 		cpt_inst_w4.s.opcode_major = ROC_SE_MAJOR_OP_HMAC;
@@ -766,9 +791,9 @@ cpt_digest_gen_sg_ver2_prep(uint32_t flags, uint64_t d_lens, struct roc_se_fc_pa
 		plt_dp_err("Insufficient dst IOV size, short by %dB", size);
 		return -1;
 	}
-	cpt_inst_w5.s.gather_sz = ((i + 2) / 3);
 
-	g_size_bytes = ((i + 2) / 3) * sizeof(struct roc_sg2list_comp);
+	gather_sz = (i + 2) / 3;
+	g_size_bytes = gather_sz * sizeof(struct roc_sg2list_comp);
 
 	/*
 	 * Output Gather list
@@ -795,7 +820,10 @@ cpt_digest_gen_sg_ver2_prep(uint32_t flags, uint64_t d_lens, struct roc_se_fc_pa
 		}
 	}
 
-	cpt_inst_w6.s.scatter_sz = ((i + 2) / 3);
+	scatter_sz = (i + 2) / 3;
+
+	cpt_inst_w5.s.gather_sz = gather_sz;
+	cpt_inst_w6.s.scatter_sz = scatter_sz;
 
 	cpt_inst_w5.s.dptr = (uint64_t)gather_comp;
 	cpt_inst_w6.s.rptr = (uint64_t)scatter_comp;
@@ -805,7 +833,228 @@ cpt_digest_gen_sg_ver2_prep(uint32_t flags, uint64_t d_lens, struct roc_se_fc_pa
 
 	inst->w4.u64 = cpt_inst_w4.u64;
 
-	return 0;
+	if (unlikely((scatter_sz >> 4) || (gather_sz >> 4))) {
+		plt_dp_err("Exceeds max supported components. Reduce segments");
+		ret = -1;
+	}
+
+	return ret;
+}
+
+static inline int
+pdcp_chain_sg1_prep(struct roc_se_fc_params *params, struct roc_se_ctx *cpt_ctx,
+		    struct cpt_inst_s *inst, union cpt_inst_w4 w4, int32_t inputlen,
+		    uint8_t hdr_len, uint64_t offset_ctrl, uint32_t req_flags, uint8_t *cipher_iv,
+		    uint8_t *auth_iv, const int pack_iv, const uint8_t pdcp_ci_alg,
+		    const uint8_t pdcp_auth_alg)
+{
+	struct roc_sglist_comp *scatter_comp, *gather_comp;
+	void *m_vaddr = params->meta_buf.vaddr;
+	uint32_t i, g_size_bytes, s_size_bytes;
+	const uint32_t mac_len = 4;
+	uint8_t *iv_d, *in_buffer;
+	uint64_t *offset_vaddr;
+	uint32_t size;
+	int ret = 0;
+
+	/* save space for IV */
+	offset_vaddr = m_vaddr;
+
+	m_vaddr = PLT_PTR_ADD(m_vaddr, ROC_SE_OFF_CTRL_LEN + PLT_ALIGN_CEIL(hdr_len, 8));
+
+	w4.s.opcode_major |= (uint64_t)ROC_DMA_MODE_SG;
+
+	/* DPTR has SG list */
+	in_buffer = m_vaddr;
+
+	((uint16_t *)in_buffer)[0] = 0;
+	((uint16_t *)in_buffer)[1] = 0;
+
+	gather_comp = PLT_PTR_ADD(m_vaddr, 8);
+
+	/* Input Gather List */
+	i = 0;
+
+	/* Offset control word followed by IV */
+
+	i = fill_sg_comp(gather_comp, i, (uint64_t)offset_vaddr, ROC_SE_OFF_CTRL_LEN + hdr_len);
+
+	*(uint64_t *)offset_vaddr = offset_ctrl;
+
+	/* Cipher IV */
+	iv_d = ((uint8_t *)offset_vaddr + ROC_SE_OFF_CTRL_LEN);
+	pdcp_iv_copy(iv_d, cipher_iv, pdcp_ci_alg, pack_iv);
+
+	/* Auth IV */
+	iv_d = ((uint8_t *)offset_vaddr + ROC_SE_OFF_CTRL_LEN + 16);
+	pdcp_iv_copy(iv_d, auth_iv, pdcp_auth_alg, pack_iv);
+
+	/* input data */
+	size = inputlen - hdr_len;
+	if (size) {
+		i = fill_sg_comp_from_iov(gather_comp, i, params->src_iov, 0, &size, NULL, 0);
+		if (unlikely(size)) {
+			plt_dp_err("Insufficient buffer space, size %d needed", size);
+			return -1;
+		}
+	}
+	((uint16_t *)in_buffer)[2] = rte_cpu_to_be_16(i);
+	g_size_bytes = ((i + 3) / 4) * sizeof(struct roc_sglist_comp);
+
+	/*
+	 * Output Scatter List
+	 */
+
+	i = 0;
+	scatter_comp = PLT_PTR_ADD(gather_comp, g_size_bytes);
+
+	if ((hdr_len)) {
+		i = fill_sg_comp(scatter_comp, i, (uint64_t)offset_vaddr + ROC_SE_OFF_CTRL_LEN,
+				 hdr_len);
+	}
+
+	/* Add output data */
+	if (cpt_ctx->ciph_then_auth && (req_flags & ROC_SE_VALID_MAC_BUF))
+		size = inputlen;
+	else
+		/* Output including mac */
+		size = inputlen + mac_len;
+
+	size -= hdr_len;
+
+	if (size) {
+		i = fill_sg_comp_from_iov(scatter_comp, i, params->dst_iov, 0, &size, NULL, 0);
+
+		if (unlikely(size)) {
+			plt_dp_err("Insufficient buffer space, size %d needed", size);
+			return -1;
+		}
+	}
+
+	((uint16_t *)in_buffer)[3] = rte_cpu_to_be_16(i);
+	s_size_bytes = ((i + 3) / 4) * sizeof(struct roc_sglist_comp);
+
+	size = g_size_bytes + s_size_bytes + ROC_SG_LIST_HDR_SIZE;
+
+	if (unlikely(size > ROC_SG_MAX_DLEN_SIZE)) {
+		plt_dp_err("Exceeds max supported components. Reduce segments");
+		ret = -1;
+	}
+
+	/* This is DPTR len in case of SG mode */
+	w4.s.dlen = size;
+	inst->w4.u64 = w4.u64;
+
+	inst->dptr = (uint64_t)in_buffer;
+
+	return ret;
+}
+
+static inline int
+pdcp_chain_sg2_prep(struct roc_se_fc_params *params, struct roc_se_ctx *cpt_ctx,
+		    struct cpt_inst_s *inst, union cpt_inst_w4 w4, int32_t inputlen,
+		    uint8_t hdr_len, uint64_t offset_ctrl, uint32_t req_flags, uint8_t *cipher_iv,
+		    uint8_t *auth_iv, const int pack_iv, const uint8_t pdcp_ci_alg,
+		    const uint8_t pdcp_auth_alg)
+{
+	struct roc_sg2list_comp *gather_comp, *scatter_comp;
+	void *m_vaddr = params->meta_buf.vaddr;
+	uint16_t scatter_sz, gather_sz;
+	const uint32_t mac_len = 4;
+	uint32_t i, g_size_bytes;
+	uint64_t *offset_vaddr;
+	union cpt_inst_w5 w5;
+	union cpt_inst_w6 w6;
+	uint8_t *iv_d;
+	uint32_t size;
+	int ret = 0;
+
+	/* save space for IV */
+	offset_vaddr = m_vaddr;
+
+	m_vaddr = PLT_PTR_ADD(m_vaddr, ROC_SE_OFF_CTRL_LEN + RTE_ALIGN_CEIL(hdr_len, 8));
+
+	w4.s.opcode_major |= (uint64_t)ROC_DMA_MODE_SG;
+	w4.s.dlen = inputlen + ROC_SE_OFF_CTRL_LEN;
+
+	gather_comp = m_vaddr;
+
+	/* Input Gather List */
+	i = 0;
+
+	/* Offset control word followed by IV */
+	*(uint64_t *)offset_vaddr = offset_ctrl;
+
+	i = fill_sg2_comp(gather_comp, i, (uint64_t)offset_vaddr, ROC_SE_OFF_CTRL_LEN + hdr_len);
+
+	/* Cipher IV */
+	iv_d = ((uint8_t *)offset_vaddr + ROC_SE_OFF_CTRL_LEN);
+	pdcp_iv_copy(iv_d, cipher_iv, pdcp_ci_alg, pack_iv);
+
+	/* Auth IV */
+	iv_d = ((uint8_t *)offset_vaddr + ROC_SE_OFF_CTRL_LEN + 16);
+	pdcp_iv_copy(iv_d, auth_iv, pdcp_auth_alg, pack_iv);
+
+	/* input data */
+	size = inputlen - hdr_len;
+	if (size) {
+		i = fill_sg2_comp_from_iov(gather_comp, i, params->src_iov, 0, &size, NULL, 0);
+		if (unlikely(size)) {
+			plt_dp_err("Insufficient buffer space, size %d needed", size);
+			return -1;
+		}
+	}
+
+	gather_sz = (i + 2) / 3;
+	g_size_bytes = gather_sz * sizeof(struct roc_sg2list_comp);
+
+	/*
+	 * Output Scatter List
+	 */
+
+	i = 0;
+	scatter_comp = PLT_PTR_ADD(gather_comp, g_size_bytes);
+
+	if ((hdr_len))
+		i = fill_sg2_comp(scatter_comp, i, (uint64_t)(offset_vaddr) + ROC_SE_OFF_CTRL_LEN,
+				  hdr_len);
+
+	/* Add output data */
+	if (cpt_ctx->ciph_then_auth && (req_flags & ROC_SE_VALID_MAC_BUF))
+		size = inputlen;
+	else
+		/* Output including mac */
+		size = inputlen + mac_len;
+
+	size -= hdr_len;
+
+	if (size) {
+		i = fill_sg2_comp_from_iov(scatter_comp, i, params->dst_iov, 0, &size, NULL, 0);
+
+		if (unlikely(size)) {
+			plt_dp_err("Insufficient buffer space, size %d needed", size);
+			return -1;
+		}
+	}
+
+	scatter_sz = (i + 2) / 3;
+
+	w5.s.gather_sz = gather_sz;
+	w6.s.scatter_sz = scatter_sz;
+
+	w5.s.dptr = (uint64_t)gather_comp;
+	w6.s.rptr = (uint64_t)scatter_comp;
+
+	inst->w4.u64 = w4.u64;
+	inst->w5.u64 = w5.u64;
+	inst->w6.u64 = w6.u64;
+
+	if (unlikely((scatter_sz >> 4) || (gather_sz >> 4))) {
+		plt_dp_err("Exceeds max supported components. Reduce segments");
+		ret = -1;
+	}
+
+	return ret;
 }
 
 static __rte_always_inline int
@@ -844,7 +1093,8 @@ cpt_enc_hmac_prep(uint32_t flags, uint64_t d_offs, uint64_t d_lens,
 	cipher_type = se_ctx->enc_cipher;
 	hash_type = se_ctx->hash_type;
 	mac_len = se_ctx->mac_len;
-	op_minor = se_ctx->template_w4.s.opcode_minor;
+	cpt_inst_w4.u64 = se_ctx->template_w4.u64;
+	op_minor = cpt_inst_w4.s.opcode_minor;
 
 	if (unlikely(!(flags & ROC_SE_VALID_IV_BUF))) {
 		iv_len = 0;
@@ -875,8 +1125,7 @@ cpt_enc_hmac_prep(uint32_t flags, uint64_t d_offs, uint64_t d_lens,
 
 	/* Encryption */
 	cpt_inst_w4.s.opcode_major = ROC_SE_MAJOR_OP_FC;
-	cpt_inst_w4.s.opcode_minor = ROC_SE_FC_MINOR_OP_ENCRYPT;
-	cpt_inst_w4.s.opcode_minor |= (uint64_t)op_minor;
+	cpt_inst_w4.s.opcode_minor |= ROC_SE_FC_MINOR_OP_ENCRYPT;
 
 	if (hash_type == ROC_SE_GMAC_TYPE) {
 		encr_offset = 0;
@@ -907,7 +1156,6 @@ cpt_enc_hmac_prep(uint32_t flags, uint64_t d_offs, uint64_t d_lens,
 	if (op_minor & ROC_SE_FC_MINOR_OP_HMAC_FIRST)
 		outputlen = enc_dlen;
 
-	/* GP op header */
 	cpt_inst_w4.s.param1 = encr_data_len;
 	cpt_inst_w4.s.param2 = auth_data_len;
 
@@ -1014,7 +1262,8 @@ cpt_dec_hmac_prep(uint32_t flags, uint64_t d_offs, uint64_t d_lens,
 	se_ctx = fc_params->ctx;
 	hash_type = se_ctx->hash_type;
 	mac_len = se_ctx->mac_len;
-	op_minor = se_ctx->template_w4.s.opcode_minor;
+	cpt_inst_w4.u64 = se_ctx->template_w4.u64;
+	op_minor = cpt_inst_w4.s.opcode_minor;
 
 	if (unlikely(!(flags & ROC_SE_VALID_IV_BUF))) {
 		iv_len = 0;
@@ -1138,7 +1387,8 @@ cpt_dec_hmac_prep(uint32_t flags, uint64_t d_offs, uint64_t d_lens,
 
 static __rte_always_inline int
 cpt_pdcp_chain_alg_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
-			struct roc_se_fc_params *params, struct cpt_inst_s *inst)
+			struct roc_se_fc_params *params, struct cpt_inst_s *inst,
+			const bool is_sg_ver2)
 {
 	uint32_t encr_data_len, auth_data_len, aad_len, passthr_len, pad_len, hdr_len;
 	uint32_t encr_offset, auth_offset, iv_offset = 0;
@@ -1146,10 +1396,10 @@ cpt_pdcp_chain_alg_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
 	uint8_t pdcp_ci_alg, pdcp_auth_alg;
 	union cpt_inst_w4 cpt_inst_w4;
 	struct roc_se_ctx *se_ctx;
+	uint64_t *offset_vaddr;
 	const int iv_len = 32;
-	uint32_t mac_len = 0;
+	uint64_t offset_ctrl;
 	uint8_t pack_iv = 0;
-	void *offset_vaddr;
 	int32_t inputlen;
 	void *dm_vaddr;
 	uint8_t *iv_d;
@@ -1166,7 +1416,6 @@ cpt_pdcp_chain_alg_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
 	}
 
 	se_ctx = params->ctx;
-	mac_len = se_ctx->mac_len;
 	pdcp_ci_alg = se_ctx->pdcp_ci_alg;
 	pdcp_auth_alg = se_ctx->pdcp_auth_alg;
 
@@ -1185,8 +1434,8 @@ cpt_pdcp_chain_alg_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
 		return -1;
 	}
 
+	cpt_inst_w4.u64 = se_ctx->template_w4.u64;
 	cpt_inst_w4.s.opcode_major = ROC_SE_MAJOR_OP_PDCP_CHAIN;
-	cpt_inst_w4.s.opcode_minor = se_ctx->template_w4.s.opcode_minor;
 
 	cpt_inst_w4.s.param1 = auth_data_len;
 	cpt_inst_w4.s.param2 = 0;
@@ -1207,6 +1456,9 @@ cpt_pdcp_chain_alg_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
 
 	inputlen += (encr_offset + pad_len);
 
+	offset_ctrl = rte_cpu_to_be_64(((uint64_t)(aad_len) << 16) | ((uint64_t)(iv_offset) << 8) |
+				       ((uint64_t)(passthr_len)));
+
 	if (likely(((req_flags & ROC_SE_SINGLE_BUF_INPLACE)) &&
 		   ((req_flags & ROC_SE_SINGLE_BUF_HEADROOM)))) {
 
@@ -1215,6 +1467,7 @@ cpt_pdcp_chain_alg_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
 		/* Use Direct mode */
 
 		offset_vaddr = PLT_PTR_SUB(dm_vaddr, ROC_SE_OFF_CTRL_LEN + hdr_len);
+		*offset_vaddr = offset_ctrl;
 
 		/* DPTR */
 		inst->dptr = (uint64_t)offset_vaddr;
@@ -1223,118 +1476,25 @@ cpt_pdcp_chain_alg_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
 
 		cpt_inst_w4.s.dlen = inputlen + ROC_SE_OFF_CTRL_LEN;
 
-		*(uint64_t *)offset_vaddr =
-			rte_cpu_to_be_64(((uint64_t)(aad_len) << 16) |
-					 ((uint64_t)(iv_offset) << 8) | ((uint64_t)(passthr_len)));
-
 		iv_d = ((uint8_t *)offset_vaddr + ROC_SE_OFF_CTRL_LEN);
 		pdcp_iv_copy(iv_d, cipher_iv, pdcp_ci_alg, pack_iv);
 
 		iv_d = ((uint8_t *)offset_vaddr + ROC_SE_OFF_CTRL_LEN + 16);
 		pdcp_iv_copy(iv_d, auth_iv, pdcp_auth_alg, pack_iv);
+
+		inst->w4.u64 = cpt_inst_w4.u64;
+		return 0;
 
 	} else {
-		struct roc_sglist_comp *scatter_comp, *gather_comp;
-		void *m_vaddr = params->meta_buf.vaddr;
-		uint32_t i, g_size_bytes, s_size_bytes;
-		uint8_t *in_buffer;
-		uint32_t size;
-
-		/* save space for IV */
-		offset_vaddr = m_vaddr;
-
-		m_vaddr = PLT_PTR_ADD(m_vaddr, ROC_SE_OFF_CTRL_LEN + RTE_ALIGN_CEIL(hdr_len, 8));
-
-		cpt_inst_w4.s.opcode_major |= (uint64_t)ROC_DMA_MODE_SG;
-
-		/* DPTR has SG list */
-		in_buffer = m_vaddr;
-
-		((uint16_t *)in_buffer)[0] = 0;
-		((uint16_t *)in_buffer)[1] = 0;
-
-		gather_comp = (struct roc_sglist_comp *)((uint8_t *)m_vaddr + 8);
-
-		/* Input Gather List */
-		i = 0;
-
-		/* Offset control word followed by iv */
-
-		i = fill_sg_comp(gather_comp, i, (uint64_t)offset_vaddr,
-				 ROC_SE_OFF_CTRL_LEN + hdr_len);
-
-		*(uint64_t *)offset_vaddr =
-			rte_cpu_to_be_64(((uint64_t)(aad_len) << 16) |
-					 ((uint64_t)(iv_offset) << 8) | ((uint64_t)(passthr_len)));
-
-		iv_d = ((uint8_t *)offset_vaddr + ROC_SE_OFF_CTRL_LEN);
-		pdcp_iv_copy(iv_d, cipher_iv, pdcp_ci_alg, pack_iv);
-
-		iv_d = ((uint8_t *)offset_vaddr + ROC_SE_OFF_CTRL_LEN + 16);
-		pdcp_iv_copy(iv_d, auth_iv, pdcp_auth_alg, pack_iv);
-
-		/* input data */
-		size = inputlen - hdr_len;
-		if (size) {
-			i = fill_sg_comp_from_iov(gather_comp, i, params->src_iov, 0, &size, NULL,
-						  0);
-			if (unlikely(size)) {
-				plt_dp_err("Insufficient buffer space,"
-					   " size %d needed",
-					   size);
-				return -1;
-			}
-		}
-		((uint16_t *)in_buffer)[2] = rte_cpu_to_be_16(i);
-		g_size_bytes = ((i + 3) / 4) * sizeof(struct roc_sglist_comp);
-
-		/*
-		 * Output Scatter List
-		 */
-
-		i = 0;
-		scatter_comp = (struct roc_sglist_comp *)((uint8_t *)gather_comp + g_size_bytes);
-
-		if ((hdr_len)) {
-			i = fill_sg_comp(scatter_comp, i,
-					 (uint64_t)offset_vaddr + ROC_SE_OFF_CTRL_LEN, hdr_len);
-		}
-
-		/* Add output data */
-		if (se_ctx->ciph_then_auth && (req_flags & ROC_SE_VALID_MAC_BUF))
-			size = inputlen;
+		if (is_sg_ver2)
+			return pdcp_chain_sg2_prep(params, se_ctx, inst, cpt_inst_w4, inputlen,
+						   hdr_len, offset_ctrl, req_flags, cipher_iv,
+						   auth_iv, pack_iv, pdcp_ci_alg, pdcp_auth_alg);
 		else
-			/* Output including mac */
-			size = inputlen + mac_len;
-
-		size -= hdr_len;
-
-		if (size) {
-			i = fill_sg_comp_from_iov(scatter_comp, i, params->dst_iov, 0, &size, NULL,
-						  0);
-
-			if (unlikely(size)) {
-				plt_dp_err("Insufficient buffer space,"
-					   " size %d needed",
-					   size);
-				return -1;
-			}
-		}
-
-		((uint16_t *)in_buffer)[3] = rte_cpu_to_be_16(i);
-		s_size_bytes = ((i + 3) / 4) * sizeof(struct roc_sglist_comp);
-
-		size = g_size_bytes + s_size_bytes + ROC_SG_LIST_HDR_SIZE;
-
-		/* This is DPTR len in case of SG mode */
-		cpt_inst_w4.s.dlen = size;
-
-		inst->dptr = (uint64_t)in_buffer;
+			return pdcp_chain_sg1_prep(params, se_ctx, inst, cpt_inst_w4, inputlen,
+						   hdr_len, offset_ctrl, req_flags, cipher_iv,
+						   auth_iv, pack_iv, pdcp_ci_alg, pdcp_auth_alg);
 	}
-
-	inst->w4.u64 = cpt_inst_w4.u64;
-
-	return 0;
 }
 
 static __rte_always_inline int
@@ -1359,8 +1519,8 @@ cpt_pdcp_alg_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
 	flags = se_ctx->zsk_flags;
 	mac_len = se_ctx->mac_len;
 
+	cpt_inst_w4.u64 = se_ctx->template_w4.u64;
 	cpt_inst_w4.s.opcode_major = ROC_SE_MAJOR_OP_PDCP;
-	cpt_inst_w4.s.opcode_minor = se_ctx->template_w4.s.opcode_minor;
 
 	if (flags == 0x1) {
 		iv_s = params->auth_iv_buf;
@@ -1447,7 +1607,7 @@ cpt_pdcp_alg_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
 	}
 
 	/*
-	 * GP op header, lengths are expected in bits.
+	 * Lengths are expected in bits.
 	 */
 	cpt_inst_w4.s.param1 = encr_data_len;
 	cpt_inst_w4.s.param2 = auth_data_len;
@@ -1521,6 +1681,7 @@ cpt_kasumi_enc_prep(uint32_t req_flags, uint64_t d_offs, uint64_t d_lens,
 	mac_len = se_ctx->mac_len;
 
 	dir = iv_s[8] & 0x1;
+	cpt_inst_w4.u64 = se_ctx->template_w4.u64;
 
 	if (flags == 0x0) {
 		/* Consider IV len */
@@ -1596,7 +1757,7 @@ cpt_kasumi_dec_prep(uint64_t d_offs, uint64_t d_lens, struct roc_se_fc_params *p
 		((1 << 6) | (se_ctx->k_ecb << 5) | (dir << 4) | (0 << 3) | (flags & 0x7));
 
 	/*
-	 * GP op header, lengths are expected in bits.
+	 * Lengths are expected in bits.
 	 */
 	cpt_inst_w4.s.param1 = encr_data_len;
 
@@ -1655,10 +1816,10 @@ static __rte_always_inline int
 fill_sess_aead(struct rte_crypto_sym_xform *xform, struct cnxk_se_sess *sess)
 {
 	struct rte_crypto_aead_xform *aead_form;
+	uint8_t aes_gcm = 0, aes_ccm = 0;
 	roc_se_cipher_type enc_type = 0; /* NULL Cipher type */
 	roc_se_auth_type auth_type = 0;	 /* NULL Auth type */
 	uint32_t cipher_key_len = 0;
-	uint8_t aes_gcm = 0;
 	aead_form = &xform->aead;
 
 	if (aead_form->op == RTE_CRYPTO_AEAD_OP_ENCRYPT) {
@@ -1678,9 +1839,10 @@ fill_sess_aead(struct rte_crypto_sym_xform *xform, struct cnxk_se_sess *sess)
 		aes_gcm = 1;
 		break;
 	case RTE_CRYPTO_AEAD_AES_CCM:
-		plt_dp_err("Crypto: Unsupported cipher algo %u",
-			   aead_form->algo);
-		return -1;
+		enc_type = ROC_SE_AES_CCM;
+		cipher_key_len = 16;
+		aes_ccm = 1;
+		break;
 	case RTE_CRYPTO_AEAD_CHACHA20_POLY1305:
 		enc_type = ROC_SE_CHACHA20;
 		auth_type = ROC_SE_POLY1305;
@@ -1699,19 +1861,27 @@ fill_sess_aead(struct rte_crypto_sym_xform *xform, struct cnxk_se_sess *sess)
 	}
 	sess->zsk_flag = 0;
 	sess->aes_gcm = aes_gcm;
+	sess->aes_ccm = aes_ccm;
 	sess->mac_len = aead_form->digest_length;
 	sess->iv_offset = aead_form->iv.offset;
 	sess->iv_length = aead_form->iv.length;
 	sess->aad_length = aead_form->aad_length;
 
-	switch (sess->iv_length) {
-	case 12:
-		sess->short_iv = 1;
-	case 16:
-		break;
-	default:
-		plt_dp_err("Crypto: Unsupported IV length %u", sess->iv_length);
-		return -1;
+	if (aes_ccm) {
+		if ((sess->iv_length < 11) || (sess->iv_length > 13)) {
+			plt_dp_err("Crypto: Unsupported IV length %u", sess->iv_length);
+			return -1;
+		}
+	} else {
+		switch (sess->iv_length) {
+		case 12:
+			sess->short_iv = 1;
+		case 16:
+			break;
+		default:
+			plt_dp_err("Crypto: Unsupported IV length %u", sess->iv_length);
+			return -1;
+		}
 	}
 
 	if (unlikely(roc_se_ciph_key_set(&sess->roc_se_ctx, enc_type, aead_form->key.data,
@@ -1856,6 +2026,7 @@ fill_sess_cipher(struct rte_crypto_sym_xform *xform, struct cnxk_se_sess *sess)
 	sess->zsk_flag = zsk_flag;
 	sess->zs_cipher = zs_cipher;
 	sess->aes_gcm = 0;
+	sess->aes_ccm = 0;
 	sess->aes_ctr = aes_ctr;
 	sess->iv_offset = c_form->iv.offset;
 	sess->iv_length = c_form->iv.length;
@@ -1887,6 +2058,7 @@ fill_sess_auth(struct rte_crypto_sym_xform *xform, struct cnxk_se_sess *sess)
 	uint8_t zsk_flag = 0, zs_auth = 0, aes_gcm = 0, is_null = 0, is_sha3 = 0;
 	struct rte_crypto_auth_xform *a_form;
 	roc_se_auth_type auth_type = 0; /* NULL Auth type */
+	uint8_t is_sm3 = 0;
 
 	if (xform->auth.algo == RTE_CRYPTO_AUTH_AES_GMAC)
 		return fill_sess_gmac(xform, sess);
@@ -1997,6 +2169,10 @@ fill_sess_auth(struct rte_crypto_sym_xform *xform, struct cnxk_se_sess *sess)
 		auth_type = ROC_SE_AES_CMAC_EIA2;
 		zsk_flag = ROC_SE_ZS_IA;
 		break;
+	case RTE_CRYPTO_AUTH_SM3:
+		auth_type = ROC_SE_SM3;
+		is_sm3 = 1;
+		break;
 	case RTE_CRYPTO_AUTH_AES_XCBC_MAC:
 	case RTE_CRYPTO_AUTH_AES_CBC_MAC:
 		plt_dp_err("Crypto: Unsupported hash algo %u", a_form->algo);
@@ -2024,6 +2200,7 @@ fill_sess_auth(struct rte_crypto_sym_xform *xform, struct cnxk_se_sess *sess)
 	sess->mac_len = a_form->digest_length;
 	sess->is_null = is_null;
 	sess->is_sha3 = is_sha3;
+	sess->is_sm3 = is_sm3;
 	if (zsk_flag) {
 		sess->auth_iv_offset = a_form->iv.offset;
 		sess->auth_iv_length = a_form->iv.length;
@@ -2218,6 +2395,7 @@ fill_fc_params(struct rte_crypto_op *cop, struct cnxk_se_sess *sess,
 	struct roc_se_fc_params fc_params;
 	char src[SRC_IOV_SIZE];
 	char dst[SRC_IOV_SIZE];
+	uint8_t ccm_iv_buf[16];
 	uint32_t iv_buf[4];
 	int ret;
 
@@ -2236,6 +2414,13 @@ fill_fc_params(struct rte_crypto_op *cop, struct cnxk_se_sess *sess,
 			       rte_crypto_op_ctod_offset(cop, uint8_t *, sess->iv_offset), 12);
 			iv_buf[3] = rte_cpu_to_be_32(0x1);
 			fc_params.iv_buf = iv_buf;
+		}
+		if (sess->aes_ccm) {
+			memcpy((uint8_t *)ccm_iv_buf,
+			       rte_crypto_op_ctod_offset(cop, uint8_t *, sess->iv_offset),
+			       sess->iv_length + 1);
+			ccm_iv_buf[0] = 14 - sess->iv_length;
+			fc_params.iv_buf = ccm_iv_buf;
 		}
 	}
 
@@ -2264,7 +2449,11 @@ fill_fc_params(struct rte_crypto_op *cop, struct cnxk_se_sess *sess,
 			d_offs = (d_offs - aad_len) | (d_offs << 16);
 			d_lens = (d_lens + aad_len) | (d_lens << 32);
 		} else {
-			fc_params.aad_buf.vaddr = sym_op->aead.aad.data;
+			/* For AES CCM, AAD is written 18B after aad.data as per API */
+			if (sess->aes_ccm)
+				fc_params.aad_buf.vaddr = PLT_PTR_ADD(sym_op->aead.aad.data, 18);
+			else
+				fc_params.aad_buf.vaddr = sym_op->aead.aad.data;
 			fc_params.aad_buf.size = aad_len;
 			flags |= ROC_SE_VALID_AAD_BUF;
 			inplace = 0;
@@ -2520,7 +2709,7 @@ err_exit:
 static __rte_always_inline int
 fill_pdcp_chain_params(struct rte_crypto_op *cop, struct cnxk_se_sess *sess,
 		       struct cpt_qp_meta_info *m_info, struct cpt_inflight_req *infl_req,
-		       struct cpt_inst_s *inst)
+		       struct cpt_inst_s *inst, const bool is_sg_ver2)
 {
 	uint32_t ci_data_length, ci_data_offset, a_data_length, a_data_offset;
 	struct rte_crypto_sym_op *sym_op = cop->sym;
@@ -2643,7 +2832,7 @@ fill_pdcp_chain_params(struct rte_crypto_op *cop, struct cnxk_se_sess *sess,
 	}
 
 	/* Finally prepare the instruction */
-	ret = cpt_pdcp_chain_alg_prep(flags, d_offs, d_lens, &fc_params, inst);
+	ret = cpt_pdcp_chain_alg_prep(flags, d_offs, d_lens, &fc_params, inst, is_sg_ver2);
 	if (unlikely(ret)) {
 		plt_dp_err("Could not prepare instruction");
 		goto free_mdata_and_exit;
@@ -2879,7 +3068,7 @@ cpt_sym_inst_fill(struct cnxk_cpt_qp *qp, struct rte_crypto_op *op, struct cnxk_
 				     is_sg_ver2);
 		break;
 	case CPT_DP_THREAD_TYPE_PDCP_CHAIN:
-		ret = fill_pdcp_chain_params(op, sess, &qp->meta_info, infl_req, inst);
+		ret = fill_pdcp_chain_params(op, sess, &qp->meta_info, infl_req, inst, is_sg_ver2);
 		break;
 	case CPT_DP_THREAD_TYPE_KASUMI:
 		ret = fill_fc_params(op, sess, &qp->meta_info, infl_req, inst, true, false,

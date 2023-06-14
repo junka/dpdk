@@ -39,6 +39,7 @@ enum roc_npc_item_type {
 	ROC_NPC_ITEM_TYPE_QINQ,
 	ROC_NPC_ITEM_TYPE_RAW,
 	ROC_NPC_ITEM_TYPE_MARK,
+	ROC_NPC_ITEM_TYPE_TX_QUEUE,
 	ROC_NPC_ITEM_TYPE_END,
 };
 
@@ -235,6 +236,7 @@ enum roc_npc_sec_action_alg {
 	ROC_NPC_SEC_ACTION_ALG1,
 	ROC_NPC_SEC_ACTION_ALG2,
 	ROC_NPC_SEC_ACTION_ALG3,
+	ROC_NPC_SEC_ACTION_ALG4,
 };
 
 struct roc_npc_sec_action {

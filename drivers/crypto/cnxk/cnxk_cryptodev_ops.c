@@ -67,14 +67,41 @@ cnxk_cpt_asym_get_mlen(void)
 	return len;
 }
 
+static int
+cnxk_cpt_dev_clear(struct rte_cryptodev *dev)
+{
+	struct cnxk_cpt_vf *vf = dev->data->dev_private;
+	int ret;
+
+	if (dev->feature_flags & RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO) {
+		roc_ae_fpm_put();
+		roc_ae_ec_grp_put();
+	}
+
+	ret = roc_cpt_int_misc_cb_unregister(cnxk_cpt_int_misc_cb, NULL);
+	if (ret < 0) {
+		plt_err("Could not unregister CPT_MISC_INT cb");
+		return ret;
+	}
+
+	roc_cpt_dev_clear(&vf->cpt);
+
+	return 0;
+}
+
 int
-cnxk_cpt_dev_config(struct rte_cryptodev *dev,
-		    struct rte_cryptodev_config *conf)
+cnxk_cpt_dev_config(struct rte_cryptodev *dev, struct rte_cryptodev_config *conf)
 {
 	struct cnxk_cpt_vf *vf = dev->data->dev_private;
 	struct roc_cpt *roc_cpt = &vf->cpt;
 	uint16_t nb_lf_avail, nb_lf;
 	int ret;
+
+	/* If this is a reconfigure attempt, clear the device and configure again */
+	if (roc_cpt->nb_lf > 0) {
+		cnxk_cpt_dev_clear(dev);
+		roc_cpt->opaque = NULL;
+	}
 
 	dev->feature_flags = cnxk_cpt_default_ff_get() & ~conf->ff_disable;
 
@@ -151,7 +178,6 @@ cnxk_cpt_dev_stop(struct rte_cryptodev *dev)
 int
 cnxk_cpt_dev_close(struct rte_cryptodev *dev)
 {
-	struct cnxk_cpt_vf *vf = dev->data->dev_private;
 	uint16_t i;
 	int ret;
 
@@ -163,19 +189,7 @@ cnxk_cpt_dev_close(struct rte_cryptodev *dev)
 		}
 	}
 
-	if (dev->feature_flags & RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO) {
-		roc_ae_fpm_put();
-		roc_ae_ec_grp_put();
-	}
-
-	ret = roc_cpt_int_misc_cb_unregister(cnxk_cpt_int_misc_cb, NULL);
-	if (ret < 0) {
-		plt_err("Could not unregister CPT_MISC_INT cb");
-		return ret;
-	}
-	roc_cpt_dev_clear(&vf->cpt);
-
-	return 0;
+	return cnxk_cpt_dev_clear(dev);
 }
 
 void
@@ -479,7 +493,7 @@ cnxk_sess_fill(struct roc_cpt *roc_cpt, struct rte_crypto_sym_xform *xform,
 	bool pdcp_chain_supported = false;
 	bool ciph_then_auth = false;
 
-	if (roc_model_is_cn9k() && (roc_cpt->hw_caps[CPT_ENG_TYPE_SE].pdcp_chain))
+	if (roc_cpt->hw_caps[CPT_ENG_TYPE_SE].pdcp_chain)
 		pdcp_chain_supported = true;
 
 	if (xform == NULL)
@@ -549,6 +563,11 @@ cnxk_sess_fill(struct roc_cpt *roc_cpt, struct rte_crypto_sym_xform *xform,
 	if (c_xfrm == NULL || a_xfrm == NULL) {
 		plt_dp_err("Invalid xforms");
 		return -EINVAL;
+	}
+
+	if (c_xfrm->cipher.algo == RTE_CRYPTO_CIPHER_AES_XTS) {
+		plt_err("AES XTS with auth algorithm is not supported");
+		return -ENOTSUP;
 	}
 
 	if (c_xfrm->cipher.algo == RTE_CRYPTO_CIPHER_3DES_CBC &&
@@ -643,7 +662,7 @@ cnxk_cpt_inst_w7_get(struct cnxk_se_sess *sess, struct roc_cpt *roc_cpt)
 		inst_w7.s.cptr += 8;
 
 	/* Set the engine group */
-	if (sess->zsk_flag || sess->aes_ctr_eea2 || sess->is_sha3)
+	if (sess->zsk_flag || sess->aes_ctr_eea2 || sess->is_sha3 || sess->is_sm3)
 		inst_w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_SE];
 	else
 		inst_w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_IE];
@@ -671,7 +690,7 @@ sym_session_configure(struct roc_cpt *roc_cpt, struct rte_crypto_sym_xform *xfor
 	if (sess_priv->cpt_op & ROC_SE_OP_CIPHER_MASK) {
 		switch (sess_priv->roc_se_ctx.fc_type) {
 		case ROC_SE_FC_GEN:
-			if (sess_priv->aes_gcm || sess_priv->chacha_poly)
+			if (sess_priv->aes_gcm || sess_priv->aes_ccm || sess_priv->chacha_poly)
 				thr_type = CPT_DP_THREAD_TYPE_FC_AEAD;
 			else
 				thr_type = CPT_DP_THREAD_TYPE_FC_CHAIN;

@@ -81,6 +81,7 @@ typedef enum {
 	ROC_SE_SHA2_SHA512 = 6,
 	ROC_SE_GMAC_TYPE = 7,
 	ROC_SE_POLY1305 = 8,
+	ROC_SE_SM3 = 9,
 	ROC_SE_SHA3_SHA224 = 10,
 	ROC_SE_SHA3_SHA256 = 11,
 	ROC_SE_SHA3_SHA384 = 12,
@@ -112,6 +113,7 @@ typedef enum {
 	ROC_SE_AES_GCM = 0x7,
 	ROC_SE_AES_XTS = 0x8,
 	ROC_SE_CHACHA20 = 0x9,
+	ROC_SE_AES_CCM = 0xA,
 
 	/* These are only for software use */
 	ROC_SE_ZUC_EEA3 = 0x90,
@@ -230,14 +232,16 @@ struct roc_se_onk_zuc_chain_ctx {
 	} w0;
 	union {
 		struct {
-			uint8_t encr_lfsr_state[64];
-			uint8_t auth_lfsr_state[64];
+			uint8_t encr_lfsr_state[72];
+			uint8_t auth_lfsr_state[72];
 		};
 		struct {
 			uint8_t ci_key[32];
 			uint8_t ci_zuc_const[32];
+			uint8_t rsvd[8];
 			uint8_t auth_key[32];
 			uint8_t auth_zuc_const[32];
+			uint8_t rsvd1[8];
 		};
 	} st;
 };
@@ -297,6 +301,7 @@ struct roc_se_ctx {
 	uint64_t pdcp_auth_alg : 2;
 	uint64_t ciph_then_auth : 1;
 	uint64_t auth_then_ciph : 1;
+	uint64_t eia2 : 1;
 	union cpt_inst_w4 template_w4;
 	/* Below fields are accessed by hardware */
 	struct se_ctx_s {

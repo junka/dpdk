@@ -282,6 +282,11 @@ struct mlx5_hca_attr {
 	uint32_t crypto_wrapped_import_method:1;
 	uint16_t esw_mgr_vport_id; /* E-Switch Mgr vport ID . */
 	uint16_t max_wqe_sz_sq;
+	uint32_t striding_rq:1;
+	uint32_t ext_stride_num_range:1;
+	uint32_t cqe_compression_128:1;
+	uint32_t multi_pkt_send_wqe:1;
+	uint32_t enhanced_multi_pkt_send_wqe:1;
 	uint32_t set_reg_c:8;
 	uint32_t nic_flow_table:1;
 	uint32_t modify_outer_ip_ecn:1;
@@ -299,6 +304,8 @@ struct mlx5_hca_attr {
 	uint32_t flow_access_aso_opc_mod:8;
 	uint32_t cross_vhca:1;
 	uint32_t lag_rx_port_affinity:1;
+	uint32_t wqe_based_flow_table_sup:1;
+	uint8_t max_header_modify_pattern_length;
 };
 
 /* LAG Context. */

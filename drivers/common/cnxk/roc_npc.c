@@ -272,6 +272,7 @@ roc_npc_init(struct roc_npc *roc_npc)
 	roc_npc->rx_parse_nibble = npc->keyx_supp_nmask[NPC_MCAM_RX];
 
 	npc->mcam_entries = npc_mcam_tot_entries() >> npc->keyw[NPC_MCAM_RX];
+	nix->exact_match_ena = npc->exact_match_ena;
 
 	/* Free, free_rev, live and live_rev entries */
 	bmap_sz = plt_bitmap_get_memory_footprint(npc->mcam_entries);
@@ -438,6 +439,10 @@ npc_parse_spi_to_sa_action(struct roc_npc *roc_npc, const struct roc_npc_action 
 		vtag_act.act.vtag1_lid = ROC_NPC_SEC_ACTION_ALG2;
 		break;
 	case ROC_NPC_SEC_ACTION_ALG3:
+		vtag_act.act.vtag1_valid = false;
+		vtag_act.act.vtag1_lid = ROC_NPC_SEC_ACTION_ALG3;
+		break;
+	case ROC_NPC_SEC_ACTION_ALG4:
 		vtag_act.act.vtag1_valid = false;
 		vtag_act.act.vtag1_lid = 0;
 		mbox = inl_dev->dev.mbox;
@@ -775,11 +780,10 @@ npc_parse_pattern(struct npc *npc, const struct roc_npc_item_info pattern[],
 		  struct roc_npc_flow *flow, struct npc_parse_state *pst)
 {
 	npc_parse_stage_func_t parse_stage_funcs[] = {
-		npc_parse_meta_items, npc_parse_mark_item,  npc_parse_pre_l2,
-		npc_parse_cpt_hdr,    npc_parse_higig2_hdr, npc_parse_la,
-		npc_parse_lb,	      npc_parse_lc,	    npc_parse_ld,
-		npc_parse_le,	      npc_parse_lf,	    npc_parse_lg,
-		npc_parse_lh,
+		npc_parse_meta_items, npc_parse_mark_item, npc_parse_pre_l2, npc_parse_cpt_hdr,
+		npc_parse_higig2_hdr, npc_parse_tx_queue,  npc_parse_la,     npc_parse_lb,
+		npc_parse_lc,	      npc_parse_ld,	   npc_parse_le,     npc_parse_lf,
+		npc_parse_lg,	      npc_parse_lh,
 	};
 	uint8_t layer = 0;
 	int key_offset;
@@ -788,9 +792,9 @@ npc_parse_pattern(struct npc *npc, const struct roc_npc_item_info pattern[],
 	if (pattern == NULL)
 		return NPC_ERR_PARAM;
 
-	memset(pst, 0, sizeof(*pst));
 	pst->npc = npc;
 	pst->flow = flow;
+	pst->nix_intf = flow->nix_intf;
 
 	/* Use integral byte offset */
 	key_offset = pst->npc->keyx_len[flow->nix_intf];
@@ -860,7 +864,11 @@ npc_parse_rule(struct roc_npc *roc_npc, const struct roc_npc_attr *attr,
 	       struct npc_parse_state *pst)
 {
 	struct npc *npc = roc_npc_to_npc_priv(roc_npc);
+	struct roc_nix *roc_nix = roc_npc->roc_nix;
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
 	int err;
+
+	pst->nb_tx_queues = nix->nb_tx_queues;
 
 	/* Check attr */
 	err = npc_parse_attr(npc, attr, flow);
@@ -1384,12 +1392,39 @@ npc_inline_dev_ipsec_action_free(struct npc *npc, struct roc_npc_flow *flow)
 	return 1;
 }
 
+static void
+roc_npc_sdp_channel_get(struct roc_npc *roc_npc, uint16_t *chan_base, uint16_t *chan_mask)
+{
+	struct roc_nix *roc_nix = roc_npc->roc_nix;
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+	uint16_t num_chan, range, num_bits = 0;
+	uint16_t mask = 0;
+
+	*chan_base = nix->rx_chan_base;
+	num_chan = nix->rx_chan_cnt - 1;
+	if (num_chan) {
+		range = *chan_base ^ (*chan_base + num_chan);
+		num_bits = (sizeof(uint32_t) * 8) - __builtin_clz(range) - 1;
+		/* Set mask for (15 - numbits) MSB bits */
+		*chan_mask = (uint16_t)~GENMASK(num_bits, 0);
+	} else {
+		*chan_mask = (uint16_t)GENMASK(15, 0);
+	}
+
+	mask = (uint16_t)GENMASK(num_bits, 0);
+	if (mask > num_chan + 1)
+		plt_warn(
+			"npc: SDP channel base:%x, channel count:%x. channel mask:%x covers more than channel count",
+			*chan_base, nix->rx_chan_cnt, *chan_mask);
+}
+
 struct roc_npc_flow *
 roc_npc_flow_create(struct roc_npc *roc_npc, const struct roc_npc_attr *attr,
 		    const struct roc_npc_item_info pattern[],
 		    const struct roc_npc_action actions[], int *errcode)
 {
 	struct npc *npc = roc_npc_to_npc_priv(roc_npc);
+	uint16_t sdp_chan_base = 0, sdp_chan_mask = 0;
 	struct roc_npc_flow *flow, *flow_iter;
 	struct npc_parse_state parse_state;
 	struct npc_flow_list *list;
@@ -1402,16 +1437,9 @@ roc_npc_flow_create(struct roc_npc *roc_npc, const struct roc_npc_attr *attr,
 			npc->sdp_channel = roc_npc->sdp_channel;
 			npc->sdp_channel_mask = roc_npc->sdp_channel_mask;
 		} else {
-			/* By default set the channel and mask to cover
-			 * the whole SDP channel range.
-			 */
-			if (roc_model_is_cn10k()) {
-				npc->sdp_channel = (uint16_t)CN10K_SDP_CH_START;
-				npc->sdp_channel_mask = (uint16_t)CN10K_SDP_CH_MASK;
-			} else {
-				npc->sdp_channel = (uint16_t)NIX_CHAN_SDP_CH_START;
-				npc->sdp_channel_mask = (uint16_t)NIX_CHAN_SDP_CH_START;
-			}
+			roc_npc_sdp_channel_get(roc_npc, &sdp_chan_base, &sdp_chan_mask);
+			npc->sdp_channel = sdp_chan_base;
+			npc->sdp_channel_mask = sdp_chan_mask;
 		}
 	}
 
@@ -1421,6 +1449,7 @@ roc_npc_flow_create(struct roc_npc *roc_npc, const struct roc_npc_attr *attr,
 		return NULL;
 	}
 	memset(flow, 0, sizeof(*flow));
+	memset(&parse_state, 0, sizeof(parse_state));
 
 	rc = npc_parse_rule(roc_npc, attr, pattern, actions, flow,
 			    &parse_state);

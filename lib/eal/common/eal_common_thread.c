@@ -176,7 +176,7 @@ eal_thread_loop(void *arg)
 
 	ret = eal_thread_dump_current_affinity(cpuset, sizeof(cpuset));
 	RTE_LOG(DEBUG, EAL, "lcore %u is ready (tid=%zx;cpuset=[%s%s])\n",
-		lcore_id, (uintptr_t)pthread_self(), cpuset,
+		lcore_id, rte_thread_self().opaque_id, cpuset,
 		ret == 0 ? "" : "...");
 
 	rte_eal_trace_thread_lcore_ready(lcore_id, cpuset);
@@ -252,6 +252,10 @@ static int ctrl_thread_init(void *arg)
 	struct rte_thread_ctrl_params *params = arg;
 
 	__rte_thread_init(rte_lcore_id(), cpuset);
+	/* Set control thread socket ID to SOCKET_ID_ANY
+	 * as control threads may be scheduled on any NUMA node.
+	 */
+	RTE_PER_LCORE(_socket_id) = SOCKET_ID_ANY;
 	params->ret = rte_thread_set_affinity_by_id(rte_thread_self(), cpuset);
 	if (params->ret != 0) {
 		__atomic_store_n(&params->ctrl_thread_status,
@@ -330,7 +334,7 @@ rte_ctrl_thread_create(pthread_t *thread, const char *name,
 	/* Check if the control thread encountered an error */
 	if (ctrl_thread_status == CTRL_THREAD_ERROR) {
 		/* ctrl thread is exiting */
-		pthread_join(*thread, NULL);
+		rte_thread_join((rte_thread_t){(uintptr_t)*thread}, NULL);
 	}
 
 	ret = params->ret;

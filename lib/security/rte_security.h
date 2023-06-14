@@ -399,6 +399,8 @@ struct rte_security_macsec_sa {
 struct rte_security_macsec_sc {
 	/** Direction of SC */
 	enum rte_security_macsec_direction dir;
+	/** Packet number threshold */
+	uint64_t pn_threshold;
 	union {
 		struct {
 			/** SAs for each association number */
@@ -407,8 +409,10 @@ struct rte_security_macsec_sc {
 			uint8_t sa_in_use[RTE_SECURITY_MACSEC_NUM_AN];
 			/** Channel is active */
 			uint8_t active : 1;
+			/** Extended packet number is enabled for SAs */
+			uint8_t is_xpn : 1;
 			/** Reserved bitfields for future */
-			uint8_t reserved : 7;
+			uint8_t reserved : 6;
 		} sc_rx;
 		struct {
 			uint16_t sa_id; /**< SA ID to be used for encryption */
@@ -416,8 +420,10 @@ struct rte_security_macsec_sc {
 			uint64_t sci; /**< SCI value to be used if send_sci is set */
 			uint8_t active : 1; /**< Channel is active */
 			uint8_t re_key_en : 1; /**< Enable Rekeying */
+			/** Extended packet number is enabled for SAs */
+			uint8_t is_xpn : 1;
 			/** Reserved bitfields for future */
-			uint8_t reserved : 6;
+			uint8_t reserved : 5;
 		} sc_tx;
 	};
 };
@@ -761,6 +767,7 @@ rte_security_macsec_sc_create(struct rte_security_ctx *instance,
  *
  * @param   instance	security instance
  * @param   sc_id	SC ID to be destroyed
+ * @param   dir		direction of the SC
  * @return
  *  - 0 if successful.
  *  - -EINVAL if sc_id is invalid or instance is NULL.
@@ -768,7 +775,8 @@ rte_security_macsec_sc_create(struct rte_security_ctx *instance,
  */
 __rte_experimental
 int
-rte_security_macsec_sc_destroy(struct rte_security_ctx *instance, uint16_t sc_id);
+rte_security_macsec_sc_destroy(struct rte_security_ctx *instance, uint16_t sc_id,
+			       enum rte_security_macsec_direction dir);
 
 /**
  * @warning
@@ -798,6 +806,7 @@ rte_security_macsec_sa_create(struct rte_security_ctx *instance,
  *
  * @param   instance	security instance
  * @param   sa_id	SA ID to be destroyed
+ * @param   dir		direction of the SA
  * @return
  *  - 0 if successful.
  *  - -EINVAL if sa_id is invalid or instance is NULL.
@@ -805,7 +814,8 @@ rte_security_macsec_sa_create(struct rte_security_ctx *instance,
  */
 __rte_experimental
 int
-rte_security_macsec_sa_destroy(struct rte_security_ctx *instance, uint16_t sa_id);
+rte_security_macsec_sa_destroy(struct rte_security_ctx *instance, uint16_t sa_id,
+			       enum rte_security_macsec_direction dir);
 
 /** Device-specific metadata field type */
 typedef uint64_t rte_security_dynfield_t;
@@ -1077,6 +1087,7 @@ rte_security_session_stats_get(struct rte_security_ctx *instance,
  *
  * @param	instance	security instance
  * @param	sa_id		SA ID for which stats are needed
+ * @param	dir		direction of the SA
  * @param	stats		statistics
  * @return
  *  - On success, return 0.
@@ -1085,7 +1096,7 @@ rte_security_session_stats_get(struct rte_security_ctx *instance,
 __rte_experimental
 int
 rte_security_macsec_sa_stats_get(struct rte_security_ctx *instance,
-				 uint16_t sa_id,
+				 uint16_t sa_id, enum rte_security_macsec_direction dir,
 				 struct rte_security_macsec_sa_stats *stats);
 
 /**
@@ -1096,6 +1107,7 @@ rte_security_macsec_sa_stats_get(struct rte_security_ctx *instance,
  *
  * @param	instance	security instance
  * @param	sc_id		SC ID for which stats are needed
+ * @param	dir		direction of the SC
  * @param	stats		SC statistics
  * @return
  *  - On success, return 0.
@@ -1104,7 +1116,7 @@ rte_security_macsec_sa_stats_get(struct rte_security_ctx *instance,
 __rte_experimental
 int
 rte_security_macsec_sc_stats_get(struct rte_security_ctx *instance,
-				 uint16_t sc_id,
+				 uint16_t sc_id, enum rte_security_macsec_direction dir,
 				 struct rte_security_macsec_sc_stats *stats);
 
 /**

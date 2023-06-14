@@ -128,6 +128,7 @@ test_sources = files(
         'test_rwlock.c',
         'test_sched.c',
         'test_security.c',
+        'test_security_inline_macsec.c',
         'test_security_inline_proto.c',
         'test_seqlock.c',
         'test_service_cores.c',
@@ -435,6 +436,11 @@ if dpdk_conf.has('RTE_HAS_LIBPCAP')
     endif
 endif
 
+if dpdk_conf.has('RTE_LIB_PDCP')
+    test_sources += 'test_pdcp.c'
+    fast_tests += [['pdcp_autotest', false, true]]
+endif
+
 if cc.has_argument('-Wno-format-truncation')
     cflags += '-Wno-format-truncation'
 endif
@@ -479,7 +485,7 @@ dpdk_test = executable('dpdk-test',
              driver_install_path),
         install: true)
 
-has_hugepage = run_command(py3, 'has_hugepage.py', check: true).stdout().strip() != '0'
+has_hugepage = run_command(py3, files('has_hugepage.py'), check: true).stdout().strip() != '0'
 message('hugepage availability: @0@'.format(has_hugepage))
 
 # some perf tests (eg: memcpy perf autotest)take very long
