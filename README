@@ -8,6 +8,7 @@ meson setup -Ddisable_drivers=common/*,dma/*,event/*,baseband/*,crypto/*,raw/*,b
 ninja
 ```
 
+
 For now it pass the compilation. Only library and drivers below are enabled. And pci bus did not really work.
 ```
 =================
