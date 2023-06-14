@@ -54,9 +54,8 @@ int
 rte_eal_hugepage_init(void)
 {
 	struct rte_mem_config *mcfg;
-	uint64_t total_mem = 0;
 	void *addr;
-	unsigned int i, j, seg_idx = 0;
+
 	struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 
@@ -97,131 +96,6 @@ rte_eal_hugepage_init(void)
 		return 0;
 	}
 
-	/* map all hugepages and sort them */
-	for (i = 0; i < internal_conf->num_hugepage_sizes; i++) {
-		struct hugepage_info *hpi;
-		rte_iova_t prev_end = 0;
-		int prev_ms_idx = -1;
-		uint64_t page_sz, mem_needed;
-		unsigned int n_pages, max_pages;
-
-		hpi = &internal_conf->hugepage_info[i];
-		page_sz = hpi->hugepage_sz;
-		max_pages = hpi->num_pages[0];
-		mem_needed = RTE_ALIGN_CEIL(internal_conf->memory - total_mem,
-				page_sz);
-
-		n_pages = RTE_MIN(mem_needed / page_sz, max_pages);
-
-		for (j = 0; j < n_pages; j++) {
-			struct rte_memseg_list *msl;
-			struct rte_fbarray *arr;
-			struct rte_memseg *seg;
-			int msl_idx, ms_idx;
-			rte_iova_t physaddr;
-			int error;
-			size_t sysctl_size = sizeof(physaddr);
-			char physaddr_str[64];
-			bool is_adjacent;
-
-			/* first, check if this segment is IOVA-adjacent to
-			 * the previous one.
-			 */
-			snprintf(physaddr_str, sizeof(physaddr_str),
-					"hw.contigmem.physaddr.%d", j);
-			error = sysctlbyname(physaddr_str, &physaddr,
-					&sysctl_size, NULL, 0);
-			if (error < 0) {
-				RTE_LOG(ERR, EAL, "Failed to get physical addr for buffer %u "
-						"from %s\n", j, hpi->hugedir);
-				return -1;
-			}
-
-			is_adjacent = prev_end != 0 && physaddr == prev_end;
-			prev_end = physaddr + hpi->hugepage_sz;
-
-			for (msl_idx = 0; msl_idx < RTE_MAX_MEMSEG_LISTS;
-					msl_idx++) {
-				bool empty, need_hole;
-				msl = &mcfg->memsegs[msl_idx];
-				arr = &msl->memseg_arr;
-
-				if (msl->page_sz != page_sz)
-					continue;
-
-				empty = arr->count == 0;
-
-				/* we need a hole if this isn't an empty memseg
-				 * list, and if previous segment was not
-				 * adjacent to current one.
-				 */
-				need_hole = !empty && !is_adjacent;
-
-				/* we need 1, plus hole if not adjacent */
-				ms_idx = rte_fbarray_find_next_n_free(arr,
-						0, 1 + (need_hole ? 1 : 0));
-
-				/* memseg list is full? */
-				if (ms_idx < 0)
-					continue;
-
-				if (need_hole && prev_ms_idx == ms_idx - 1)
-					ms_idx++;
-				prev_ms_idx = ms_idx;
-
-				break;
-			}
-			if (msl_idx == RTE_MAX_MEMSEG_LISTS) {
-				RTE_LOG(ERR, EAL, "Could not find space for memseg. Please increase %s and/or %s in configuration.\n",
-					RTE_STR(RTE_MAX_MEMSEG_PER_TYPE),
-					RTE_STR(RTE_MAX_MEM_MB_PER_TYPE));
-				return -1;
-			}
-			arr = &msl->memseg_arr;
-			seg = rte_fbarray_get(arr, ms_idx);
-
-			addr = RTE_PTR_ADD(msl->base_va,
-					(size_t)msl->page_sz * ms_idx);
-
-			/* address is already mapped in memseg list, so using
-			 * MAP_FIXED here is safe.
-			 */
-			addr = mmap(addr, page_sz, PROT_READ|PROT_WRITE,
-					MAP_SHARED | MAP_FIXED,
-					hpi->lock_descriptor,
-					j * EAL_PAGE_SIZE);
-			if (addr == MAP_FAILED) {
-				RTE_LOG(ERR, EAL, "Failed to mmap buffer %u from %s\n",
-						j, hpi->hugedir);
-				return -1;
-			}
-
-			seg->addr = addr;
-			seg->iova = physaddr;
-			seg->hugepage_sz = page_sz;
-			seg->len = page_sz;
-			seg->nchannel = mcfg->nchannel;
-			seg->nrank = mcfg->nrank;
-			seg->socket_id = 0;
-
-			rte_fbarray_set_used(arr, ms_idx);
-
-			RTE_LOG(INFO, EAL, "Mapped memory segment %u @ %p: physaddr:0x%"
-					PRIx64", len %zu\n",
-					seg_idx++, addr, physaddr, page_sz);
-
-			total_mem += seg->len;
-		}
-		if (total_mem >= internal_conf->memory)
-			break;
-	}
-	if (total_mem < internal_conf->memory) {
-		RTE_LOG(ERR, EAL, "Couldn't reserve requested memory, "
-				"requested: %" PRIu64 "M "
-				"available: %" PRIu64 "M\n",
-				internal_conf->memory >> 20, total_mem >> 20);
-		return -1;
-	}
 	return 0;
 }
 
