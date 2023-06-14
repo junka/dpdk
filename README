@@ -42,10 +42,67 @@ net:
         pcap, ring, virtio, vmxnet3, 
 ```
 
-./app/dpdk-testpmd --no-huge --no-pci --no-hpet --no-shconf -l 4 -m 1024 -- -i
+
+Luckily or not, I got an intel Mac, like freebsd, it always uses legacy memory model
+
+```
+./app/dpdk-testpmd -l 10-12 --log-level lib.eal:debug --no-huge --no-pci --no-hpet --no-shconf --no-telemetry -m 512 -- --no-mlockall --total-num-mbufs=2048  -i
+```
+
+```
+EAL: lib.eal log level changed from info to debug
+EAL: Sysctl reports 16 cpus
+EAL: Detected lcore 0 as core 0 on socket 0
+EAL: Detected lcore 1 as core 0 on socket 0
+EAL: Detected lcore 2 as core 0 on socket 0
+EAL: Detected lcore 3 as core 0 on socket 0
+EAL: Detected lcore 4 as core 0 on socket 0
+EAL: Detected lcore 5 as core 0 on socket 0
+EAL: Detected lcore 6 as core 0 on socket 0
+EAL: Detected lcore 7 as core 0 on socket 0
+EAL: Detected lcore 8 as core 0 on socket 0
+EAL: Detected lcore 9 as core 0 on socket 0
+EAL: Detected lcore 10 as core 0 on socket 0
+EAL: Detected lcore 11 as core 0 on socket 0
+EAL: Detected lcore 12 as core 0 on socket 0
+EAL: Detected lcore 13 as core 0 on socket 0
+EAL: Detected lcore 14 as core 0 on socket 0
+EAL: Detected lcore 15 as core 0 on socket 0
+EAL: Maximum logical cores by configuration: 128
+EAL: Detected CPU lcores: 16
+EAL: Detected NUMA nodes: 1
+EAL: Checking presence of .so 'librte_eal.so.23.2'
+EAL: Checking presence of .so 'librte_eal.so.23'
+EAL: Checking presence of .so 'librte_eal.so'
+EAL: Detected static linkage of DPDK
+EAL: No shared files mode enabled, IPC will be disabled
+EAL: No shared files mode enabled, IPC is disabled
+EAL: Specific IOVA mode is not requested, autodetecting
+EAL: Selected IOVA mode 'VA'
+EAL: Ask a virtual area of 0x2e000 bytes
+EAL: Virtual area found at 0x1000000000 (size = 0x2e000)
+EAL: Setting up physically contiguous memory...
+EAL: Ask a virtual area of 0x605000 bytes
+EAL: Virtual area found at 0x100002e000 (size = 0x605000)
+EAL: Memseg list allocated at socket 0, page size 0x4kB
+EAL: No shared files mode enabled, IPC is disabled
+EAL: Added 512M to heap on socket 0
+EAL: WARNING: TSC frequency estimated roughly - clock timings may be less accurate.
+EAL: TSC frequency is ~2410000 KHz
+EAL: Main lcore 10 is ready (tid=7ff84911c340;cpuset=[10,42,74,106])
+EAL: lcore 11 is ready (tid=70000c564000;cpuset=[11,43,75,107])
+EAL: lcore 12 is ready (tid=70000c5e7000;cpuset=[12,44,76,108])
+testpmd: No probed ethernet devices
+Interactive-mode selected
+testpmd: create a new mbuf pool <mb_pool_0>: n=2048, size=2176, socket=0
+testpmd: preferred mempool ops selected: ring_mp_mc
+Done
+testpmd> 
+```
 
 Future work:
-initial testpmd with no pci
+initial testpmd with pcap
+2M hugepage
 make vhost available so we can setup a qemu with dpdk vhostuserclient.
 enable some basic test for traffic
 
