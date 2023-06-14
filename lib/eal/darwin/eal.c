@@ -21,27 +21,28 @@
 #include <sys/queue.h>
 #include <sys/stat.h>
 
-#include <rte_common.h>
-#include <rte_debug.h>
-#include <rte_memory.h>
-#include <rte_launch.h>
-#include <rte_eal.h>
-#include <rte_errno.h>
-#include <rte_per_lcore.h>
-#include <rte_lcore.h>
-#include <rte_service_component.h>
-#include <rte_log.h>
-#include <rte_random.h>
-#include <rte_cycles.h>
-#include <rte_string_fns.h>
-#include <rte_cpuflags.h>
-#include <rte_interrupts.h>
+#include <malloc_heap.h>
 #include <rte_bus.h>
+#include <rte_common.h>
+#include <rte_cpuflags.h>
+#include <rte_cycles.h>
+#include <rte_debug.h>
 #include <rte_dev.h>
 #include <rte_devargs.h>
+#include <rte_eal.h>
+#include <rte_eal_memconfig.h>
+#include <rte_errno.h>
+#include <rte_interrupts.h>
+#include <rte_launch.h>
+#include <rte_lcore.h>
+#include <rte_log.h>
+#include <rte_memory.h>
+#include <rte_per_lcore.h>
+#include <rte_random.h>
+#include <rte_service_component.h>
+#include <rte_string_fns.h>
 #include <rte_version.h>
 #include <rte_vfio.h>
-#include <malloc_heap.h>
 #include <telemetry_internal.h>
 
 #include "eal_private.h"
@@ -754,13 +755,25 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
+	rte_mcfg_mem_read_lock();
+
 	if (rte_eal_memory_init() < 0) {
+		rte_mcfg_mem_read_unlock();
 		rte_eal_init_alert("Cannot init memory");
 		rte_errno = ENOMEM;
 		return -1;
 	}
 
 	if (rte_eal_malloc_heap_init() < 0) {
+		rte_mcfg_mem_read_unlock();
+		rte_eal_init_alert("Cannot init malloc heap");
+		rte_errno = ENODEV;
+		return -1;
+	}
+
+	rte_mcfg_mem_read_unlock();
+
+	if (rte_eal_malloc_heap_populate() < 0) {
 		rte_eal_init_alert("Cannot init malloc heap");
 		rte_errno = ENODEV;
 		return -1;
